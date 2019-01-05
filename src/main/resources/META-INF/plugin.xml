@@ -1,0 +1,53 @@
+<idea-plugin version="2">
+    <id>me.serce.bazillon</id>
+    <name>Intellij-Bazillion</name>
+    <vendor email="sergeicelov@gmail.com">Intellij Bazillion</vendor>
+
+    <description><![CDATA[
+        Bazel plugin that's actually fast
+        ddddddd
+    ]]></description>
+
+    <change-notes><![CDATA[
+      Bazel plugin that's actually fast
+        ddddddd
+        No changes
+    ]]>
+    </change-notes>
+
+    <idea-version since-build="183.0"/>
+
+    <depends>com.intellij.modules.lang</depends>
+    <depends>com.intellij.modules.externalSystem</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <projectImportBuilder implementation="me.serce.bazillion.BazilProjectImportBuilder"/>
+        <projectImportProvider implementation="me.serce.bazillion.BazilProjectImportProvider"/>
+        <projectOpenProcessor id="bazil" implementation="me.serce.bazillion.BazilProjectOpenProcessor"/>
+
+        <externalSystemManager implementation="me.serce.bazillion.BazilManager"/>
+
+        <projectService serviceImplementation="me.serce.bazillion.BazilSettings"/>
+        <projectService serviceImplementation="me.serce.bazillion.BazilLocalSettings"/>
+
+        <registryKey key="system.in.process"
+                     defaultValue="true"
+                     description="Invalidate caches invalidates the cache data imported from external systems"/>
+    </extensions>
+
+    <actions>
+    </actions>
+
+    <application-components>
+        <!-- Add your project components here -->
+    </application-components>
+
+    <project-components>
+    </project-components>
+
+    <module-components>
+        <!-- Add your modules components here -->
+    </module-components>
+
+
+</idea-plugin>

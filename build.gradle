@@ -1,0 +1,48 @@
+buildscript {
+    repositories {
+        jcenter()
+    }
+    dependencies {
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+plugins {
+    id 'org.jetbrains.intellij' version '0.4.1'
+    id 'net.researchgate.release' version '2.4.0'
+}
+
+repositories {
+    jcenter()
+}
+
+apply plugin: 'kotlin'
+apply plugin: 'org.jetbrains.intellij'
+
+sourceCompatibility = 1.8
+
+compileKotlin {
+    kotlinOptions.jvmTarget = 1.8
+}
+compileTestKotlin {
+    kotlinOptions.jvmTarget = 1.8
+}
+
+
+group 'me.serce'
+version '0.0.1-SNAPSHOT'
+
+intellij {
+    pluginName 'Intellij-Bazillion'
+
+    version '2018.3.1'
+    downloadSources true
+    updateSinceUntilBuild = false
+
+    sandboxDirectory project.rootDir.canonicalPath + "/.sandbox"
+}
+
+dependencies {
+    compile "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
+    compile "org.jetbrains.kotlin:kotlin-reflect:$kotlin_version"
+}
