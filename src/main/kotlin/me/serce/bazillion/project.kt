@@ -1,18 +1,20 @@
 package me.serce.bazillion
 
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.type.TypeFactory
+import com.google.devtools.build.lib.syntax.*
+import com.google.devtools.build.lib.vfs.PathFragment
 import com.intellij.execution.configurations.SimpleJavaParameters
 import com.intellij.externalSystem.JavaProjectData
 import com.intellij.icons.AllIcons
 import com.intellij.ide.util.projectWizard.WizardContext
 import com.intellij.openapi.components.ServiceManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.externalSystem.ExternalSystemManager
 import com.intellij.openapi.externalSystem.model.DataNode
 import com.intellij.openapi.externalSystem.model.ProjectKeys
 import com.intellij.openapi.externalSystem.model.ProjectSystemId
-import com.intellij.openapi.externalSystem.model.project.ContentRootData
-import com.intellij.openapi.externalSystem.model.project.ExternalSystemSourceType
-import com.intellij.openapi.externalSystem.model.project.ModuleData
-import com.intellij.openapi.externalSystem.model.project.ProjectData
+import com.intellij.openapi.externalSystem.model.project.*
 import com.intellij.openapi.externalSystem.model.settings.ExternalSystemExecutionSettings
 import com.intellij.openapi.externalSystem.model.task.ExternalSystemTaskId
 import com.intellij.openapi.externalSystem.model.task.ExternalSystemTaskNotificationListener
@@ -37,6 +39,7 @@ import com.intellij.openapi.module.JavaModuleType
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.projectRoots.JavaSdkVersionUtil
+import com.intellij.openapi.roots.DependencyScope
 import com.intellij.openapi.roots.LanguageLevelProjectExtension
 import com.intellij.openapi.util.Pair
 import com.intellij.openapi.util.registry.Registry
@@ -51,6 +54,8 @@ val TOPIC = Topic.create<BazilSettingsListener>(
   "Bazil-specific settings",
   BazilSettingsListener::class.java
 )
+
+private val LOG = Logger.getInstance("#me.serce.bazillion")
 
 class BazilProjectSettings : ExternalProjectSettings() {
   override fun clone(): BazilProjectSettings {
@@ -239,6 +244,25 @@ class BazilLocalSettings(project: Project) :
 class BazilExecutionSettings : ExternalSystemExecutionSettings() {
 }
 
+// bazel structure
+
+data class ModuleInfo(
+  val data: DataNode<ModuleData>,
+  val parsed: Parser.ParseResult
+)
+
+data class ModuleDeps(
+  val compileLibDeps: List<LibraryDependencyData>,
+  val compileModuleDeps: List<ModuleDependencyData>,
+  val testLibDeps: List<LibraryDependencyData>
+)
+
+val modules: MutableMap<String, ModuleInfo> = mutableMapOf()
+val moduleDeps: MutableMap<String, ModuleInfo> = mutableMapOf()
+
+//
+
+
 class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSettings> {
 //  private val myCancellationMap = MultiMap.create<ExternalSystemTaskId, CancellationTokenSource>()
 
@@ -261,7 +285,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
       projectDataNode
         .createChild(
           ProjectKeys.MODULE, ModuleData(
-            projectName, SYSTEM_ID, getDefaultModuleTypeId(),
+            projectName, SYSTEM_ID, EmptyModuleType.EMPTY_MODULE,
             projectName, projectPath, projectPath
           )
         )
@@ -271,8 +295,9 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
       val projectRoot = File(projectPath)
       val projectName = projectRoot.name
       val projectData = ProjectData(SYSTEM_ID, projectName, projectPath, projectPath)
-      val projectDataNode = DataNode(ProjectKeys.PROJECT, projectData, null)
+      val projectDataNode: DataNode<ProjectData> = DataNode(ProjectKeys.PROJECT, projectData, null)
 
+      // let's assume that root doesn't have any code
       val root = projectDataNode
         .createChild(
           ProjectKeys.MODULE, ModuleData(
@@ -282,13 +307,81 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
         )
         .createChild(ProjectKeys.CONTENT_ROOT, ContentRootData(SYSTEM_ID, projectPath))
       for (child in projectRoot.listFiles()) {
-        collectProjects(child, root)
+        collectProjects(projectRoot, child, root)
       }
+
+      val libManager = LibManager(projectRoot, projectDataNode)
+
+
+      // reprocess modules
+      modules.forEach { id, (moduleNode: DataNode<ModuleData>, parsed) ->
+
+        val funCallExpressions = findAllLibDefinitions(parsed)
+
+        val moduleDeps = findAllAt(funCallExpressions, "java_library", "deps")
+        val testDeps = findAllAt(funCallExpressions, "junit_tests", "deps")
+
+        val compileLibDeps = mutableListOf<LibraryDependencyData>()
+        val compileModuleDeps = mutableListOf<ModuleDependencyData>()
+        val testLibDeps = mutableListOf<LibraryDependencyData>()
+
+        for (dep in testDeps) {
+          if (!dep.startsWith("//third_party")) {
+            println("bug")
+          } else {
+            val librariesData: List<LibraryData> = libManager.getLib(dep)
+            for (libData in librariesData) {
+              testLibDeps.add(
+                LibraryDependencyData(moduleNode.data, libData, LibraryLevel.PROJECT).apply {
+                  scope = DependencyScope.TEST
+                }
+              )
+            }
+          }
+
+        }
+
+        for (dep in moduleDeps) {
+          if (!dep.startsWith("//third_party")) {
+            val moduleDepNode = modules[dep]
+            if (moduleDepNode != null) {
+              compileModuleDeps.add(ModuleDependencyData(moduleNode.data, moduleDepNode.data.data))
+            } else {
+              println("bug")
+            }
+          } else {
+            val librariesData: List<LibraryData> = libManager.getLib(dep)
+            for (libData in librariesData) {
+              testLibDeps.add(LibraryDependencyData(moduleNode.data, libData, LibraryLevel.PROJECT))
+            }
+          }
+        }
+        val deps = ModuleDeps(compileLibDeps, compileModuleDeps, testLibDeps)
+
+
+        for (lib in deps.compileLibDeps) {
+          moduleNode.createChild(ProjectKeys.LIBRARY_DEPENDENCY, lib)
+        }
+        for(module in deps.compileModuleDeps) {
+          moduleNode.createChild(ProjectKeys.MODULE_DEPENDENCY, module)
+        }
+        for(testLib in deps.testLibDeps) {
+          moduleNode.createChild(ProjectKeys.LIBRARY_DEPENDENCY, testLib)
+        }
+
+
+      }
+
       return projectDataNode
     }
   }
 
-  private fun collectProjects(root: File, node: DataNode<ContentRootData>) {
+
+  private fun collectProjects(
+    projectRoot: File,
+    root: File,
+    node: DataNode<ContentRootData>
+  ) {
     if (!root.isDirectory) {
       return
     }
@@ -306,12 +399,24 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
       }
     }
     if (bazelRoot && srcFolder) {
-      val content: DataNode<ContentRootData> = node.createChild(
+      val id = "//${File(projectPath).relativeTo(projectRoot)}"
+      val module = node.createChild(
         ProjectKeys.MODULE, ModuleData(
-          projectName, SYSTEM_ID, JavaModuleType.getModuleType().id,
+          id, SYSTEM_ID, JavaModuleType.getModuleType().id,
           projectName, projectPath, projectPath
         )
       )
+
+      val bazelFile = File("$projectPath/BUILD")
+
+      val parsed: Parser.ParseResult =
+        Parser.parseFile(
+          ParserInputSource.create(bazelFile.readBytes(), PathFragment.create(bazelFile.absolutePath)),
+          {})
+
+      modules[id] = ModuleInfo(module, parsed)
+
+      val content: DataNode<ContentRootData> = module
         .createChild(ProjectKeys.CONTENT_ROOT, ContentRootData(SYSTEM_ID, projectPath))
 
       content.data.storePath(ExternalSystemSourceType.SOURCE, "$projectPath/src/main/java")
@@ -320,7 +425,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
       content.data.storePath(ExternalSystemSourceType.TEST_RESOURCE, "$projectPath/src/test/resources")
     } else {
       for (child in files) {
-        collectProjects(child, node)
+        collectProjects(projectRoot, child, node)
       }
     }
   }
@@ -328,12 +433,100 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
   override fun cancelTask(taskId: ExternalSystemTaskId, listener: ExternalSystemTaskNotificationListener): Boolean {
     return true
   }
+}
 
-  private fun getDefaultModuleTypeId(): String {
-    return EmptyModuleType.getInstance().id
+private fun findAllAt(
+  funCallExpressions: List<FuncallExpression>,
+  funName: String,
+  childName: String
+): List<String> {
+  val moduleDeps = funCallExpressions
+    .filter { (it.function as? Identifier)?.name == funName }
+    .flatMap { it.arguments }
+    .filterIsInstance<Argument.Keyword>()
+    .filter { it.name == childName }
+    .map { it.value }
+    .filterIsInstance<ListLiteral>()
+    .flatMap { it.elements }
+    .filterIsInstance<StringLiteral>()
+    .map { it.value }
+  return moduleDeps
+}
 
-//    val moduleType = ModuleTypeManager.getInstance().defaultModuleType
-//    return moduleType.id
+private fun findAllLibDefinitions(parsed: Parser.ParseResult): List<FuncallExpression> {
+  return parsed.statements
+    .filterIsInstance<ExpressionStatement>().map { it.expression }
+    .filterIsInstance<FuncallExpression>()
+}
+
+
+class LibManager(
+  val projectRoot: File,
+  root: DataNode<ProjectData>
+) {
+  private val cached: MutableMap<String, List<LibraryData>> = mutableMapOf()
+  private val libraryMapping: MutableMap<String, LibraryData> = mutableMapOf()
+
+  init {
+    val mapper = ObjectMapper()
+    val factory = TypeFactory.defaultInstance()
+    val type = factory.constructMapType(HashMap::class.java, String::class.java, Any::class.java)
+    val workspaceFile = File("${projectRoot.absolutePath}/third_party/workspace.bzl")
+    for (line in workspaceFile.readLines()) {
+      if (line.contains("""{"artifact": """")) {
+        val artifact = mapper.readValue<Map<String, Any>>(line.trim(','), type)
+        val bind = artifact["bind"] as String
+        val name = artifact["name"] as String
+        val url = artifact["url"] as String
+
+        val (groupId, artifactId, version) = (artifact["artifact"] as String).split(":")
+        val libraryData = LibraryData(SYSTEM_ID, name)
+        libraryData.setGroup(groupId)
+        libraryData.artifactId = artifactId
+        libraryData.version = version
+        libraryData.addPath(
+          LibraryPathType.BINARY,
+          File(url.replace("https://repo.maven.apache.org/maven2/", "/Users/sergey/.m2/repository/")).absolutePath
+        )
+        libraryMapping[bind] = libraryData
+        root.createChild(
+          ProjectKeys.LIBRARY,
+          libraryData
+        )
+      }
+    }
+  }
+
+  fun getLib(dep: String): List<LibraryData> {
+    return cached.getOrPut(dep) {
+      val depPath = when (dep.contains(":")) {
+        true -> dep.substring(0, dep.lastIndexOf(':'))
+        else -> dep
+      }
+      val buildFile = File("${projectRoot.absoluteFile}$depPath/BUILD")
+
+      val parsed: Parser.ParseResult =
+        Parser.parseFile(
+          ParserInputSource.create(buildFile.readBytes(), PathFragment.create(buildFile.absolutePath)),
+          {})
+
+      val funCallExpressions = findAllLibDefinitions(parsed)
+      val libs = findAllAt(funCallExpressions, "java_library", "exports")
+
+      val result = mutableListOf<LibraryData>()
+      for (lib in libs) {
+        if (lib.startsWith("//external:")) {
+          val defined = libraryMapping[lib.substring("//external:".length)]
+          if (defined != null) {
+            result.add(defined)
+          } else {
+            println("oooopsie $lib")
+          }
+        }
+      }
+
+      return result
+    }
   }
 }
 
