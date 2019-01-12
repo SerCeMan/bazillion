@@ -28,6 +28,9 @@ compileTestKotlin {
     kotlinOptions.jvmTarget = 1.8
 }
 
+runIde {
+    jvmArgs '-Xmx4G'
+}
 
 group 'me.serce'
 version '0.0.1-SNAPSHOT'

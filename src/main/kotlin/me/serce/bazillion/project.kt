@@ -8,6 +8,7 @@ import com.intellij.execution.configurations.SimpleJavaParameters
 import com.intellij.externalSystem.JavaProjectData
 import com.intellij.icons.AllIcons
 import com.intellij.ide.util.projectWizard.WizardContext
+import com.intellij.jarRepository.JarRepositoryManager
 import com.intellij.openapi.components.ServiceManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.externalSystem.ExternalSystemManager
@@ -41,12 +42,14 @@ import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.projectRoots.JavaSdkVersionUtil
 import com.intellij.openapi.roots.DependencyScope
 import com.intellij.openapi.roots.LanguageLevelProjectExtension
+import com.intellij.openapi.roots.libraries.ui.OrderRoot
 import com.intellij.openapi.util.Pair
 import com.intellij.openapi.util.registry.Registry
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.projectImport.ProjectOpenProcessorBase
 import com.intellij.util.Function
 import com.intellij.util.messages.Topic
+import org.jetbrains.idea.maven.utils.library.RepositoryLibraryProperties
 import java.io.File
 
 val SYSTEM_ID = ProjectSystemId("BAZIL")
@@ -241,7 +244,7 @@ class BazilLocalSettings(project: Project) :
   }
 }
 
-class BazilExecutionSettings : ExternalSystemExecutionSettings() {
+class BazilExecutionSettings(val project: Project) : ExternalSystemExecutionSettings() {
 }
 
 // bazel structure
@@ -252,13 +255,13 @@ data class ModuleInfo(
 )
 
 data class ModuleDeps(
-  val compileLibDeps: List<LibraryDependencyData>,
-  val compileModuleDeps: List<ModuleDependencyData>,
-  val testLibDeps: List<LibraryDependencyData>
+  val compileLibDeps: Set<LibraryData>,
+  val compileModuleDeps: Set<ModuleData>,
+  val testLibDeps: Set<LibraryData>
 )
 
 val modules: MutableMap<String, ModuleInfo> = mutableMapOf()
-val moduleDeps: MutableMap<String, ModuleInfo> = mutableMapOf()
+val moduleDependencies: MutableMap<String, ModuleDeps> = mutableMapOf()
 
 //
 
@@ -273,6 +276,10 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
     settings: BazilExecutionSettings?,
     listener: ExternalSystemTaskNotificationListener
   ): DataNode<ProjectData> {
+
+    modules.clear()
+    moduleDependencies.clear()
+
 
     if (isPreviewMode) {
       // Create project preview model w/o request to gradle, there are two main reasons for the it:
@@ -310,69 +317,104 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
         collectProjects(projectRoot, child, root)
       }
 
-      val libManager = LibManager(projectRoot, projectDataNode)
+      val libManager = LibManager(settings!!.project, projectRoot, projectDataNode)
 
 
       // reprocess modules
       modules.forEach { id, (moduleNode: DataNode<ModuleData>, parsed) ->
 
-        val funCallExpressions = findAllLibDefinitions(parsed)
+        println("processing module $id")
 
-        val moduleDeps = findAllAt(funCallExpressions, "java_library", "deps")
-        val testDeps = findAllAt(funCallExpressions, "junit_tests", "deps")
-
-        val compileLibDeps = mutableListOf<LibraryDependencyData>()
-        val compileModuleDeps = mutableListOf<ModuleDependencyData>()
-        val testLibDeps = mutableListOf<LibraryDependencyData>()
-
-        for (dep in testDeps) {
-          if (!dep.startsWith("//third_party")) {
-            println("bug")
-          } else {
-            val librariesData: List<LibraryData> = libManager.getLib(dep)
-            for (libData in librariesData) {
-              testLibDeps.add(
-                LibraryDependencyData(moduleNode.data, libData, LibraryLevel.PROJECT).apply {
-                  scope = DependencyScope.TEST
-                }
-              )
-            }
-          }
-
-        }
-
-        for (dep in moduleDeps) {
-          if (!dep.startsWith("//third_party")) {
-            val moduleDepNode = modules[dep]
-            if (moduleDepNode != null) {
-              compileModuleDeps.add(ModuleDependencyData(moduleNode.data, moduleDepNode.data.data))
-            } else {
-              println("bug")
-            }
-          } else {
-            val librariesData: List<LibraryData> = libManager.getLib(dep)
-            for (libData in librariesData) {
-              testLibDeps.add(LibraryDependencyData(moduleNode.data, libData, LibraryLevel.PROJECT))
-            }
-          }
-        }
-        val deps = ModuleDeps(compileLibDeps, compileModuleDeps, testLibDeps)
-
+        val deps = moduleDependencies.getOrPut(id, getModuleDeps(id, libManager))
 
         for (lib in deps.compileLibDeps) {
-          moduleNode.createChild(ProjectKeys.LIBRARY_DEPENDENCY, lib)
+          moduleNode.createChild(
+            ProjectKeys.LIBRARY_DEPENDENCY,
+            LibraryDependencyData(moduleNode.data, lib, LibraryLevel.PROJECT)
+          )
         }
-        for(module in deps.compileModuleDeps) {
-          moduleNode.createChild(ProjectKeys.MODULE_DEPENDENCY, module)
+        for (module in deps.compileModuleDeps) {
+          moduleNode.createChild(
+            ProjectKeys.MODULE_DEPENDENCY,
+            ModuleDependencyData(moduleNode.data, module)
+          )
         }
-        for(testLib in deps.testLibDeps) {
-          moduleNode.createChild(ProjectKeys.LIBRARY_DEPENDENCY, testLib)
+        for (testLib in deps.testLibDeps) {
+          moduleNode.createChild(
+            ProjectKeys.LIBRARY_DEPENDENCY,
+            LibraryDependencyData(moduleNode.data, testLib, LibraryLevel.PROJECT).apply {
+              scope = DependencyScope.TEST
+            }
+          )
         }
-
-
       }
 
+      println("DOOOONE")
+
       return projectDataNode
+    }
+  }
+
+  private fun getModuleDeps(
+    id: String,
+    libManager: LibManager
+  ): () -> ModuleDeps {
+    return {
+      val (moduleNode: DataNode<ModuleData>, parsed) = modules[id]!!
+      println("processing $id")
+      val funCallExpressions = findAllLibDefinitions(parsed)
+
+      val moduleDeps = findAllAt(
+        funCallExpressions,
+        listOf("datanucleus_java_library", "java_library", "java_binary"),
+        "deps"
+      )
+      val testDeps = findAllAt(funCallExpressions, listOf("junit_tests"), "deps")
+
+      val compileLibDeps = hashSetOf<LibraryData>()
+      val compileModuleDeps = hashSetOf<ModuleData>()
+      val testLibDeps = hashSetOf<LibraryData>()
+
+      for (dep in testDeps) {
+        if (!dep.startsWith("//third_party")) {
+          println("bug test dep")
+        } else {
+          testLibDeps.addAll(libManager.findThirdParty(dep))
+        }
+      }
+
+      for (dep in moduleDeps) {
+        if (!dep.startsWith("//third_party")) {
+          val moduleDepNode = modules[dep]
+          if (moduleDepNode != null) {
+            compileModuleDeps.add(moduleDepNode.data.data)
+
+            if (dep != id) {
+              // we don't like infinite recursions
+              val dps = moduleDependencies.getOrPut(dep, getModuleDeps(dep, libManager))
+              compileLibDeps.addAll(dps.compileLibDeps)
+              compileModuleDeps.addAll(dps.compileModuleDeps)
+              testLibDeps.addAll(dps.testLibDeps)
+            }
+
+
+          } else if (dep.startsWith(":")) {
+            // ignore, in the same module
+          } else if (dep.startsWith("@")) {
+            val librariesData: LibraryData = libManager.getActual(dep)
+            compileLibDeps.add(librariesData)
+          } else if (dep.endsWith(":test-lib")) {
+            // todo
+          } else {
+            println("bug $dep")
+          }
+        } else {
+          val librariesData = libManager.findThirdParty(dep)
+          compileLibDeps.addAll(librariesData)
+        }
+      }
+
+      ModuleDeps(compileLibDeps, compileModuleDeps, testLibDeps)
     }
   }
 
@@ -391,7 +433,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
     var bazelRoot = false
     var srcFolder = false
     for (child in files) {
-      if (child.name == "BUILD") {
+      if (child.name == "BUILD" && child.length() != 0L) {
         bazelRoot = true
       }
       if (child.name == "src" && child.isDirectory) {
@@ -437,11 +479,11 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
 
 private fun findAllAt(
   funCallExpressions: List<FuncallExpression>,
-  funName: String,
+  funNames: List<String>,
   childName: String
 ): List<String> {
   val moduleDeps = funCallExpressions
-    .filter { (it.function as? Identifier)?.name == funName }
+    .filter { (it.function as? Identifier)?.name in funNames }
     .flatMap { it.arguments }
     .filterIsInstance<Argument.Keyword>()
     .filter { it.name == childName }
@@ -461,72 +503,198 @@ private fun findAllLibDefinitions(parsed: Parser.ParseResult): List<FuncallExpre
 
 
 class LibManager(
-  val projectRoot: File,
+  project: Project,
+  projectRoot: File,
   root: DataNode<ProjectData>
 ) {
-  private val cached: MutableMap<String, List<LibraryData>> = mutableMapOf()
+  private val actualLibraries: MutableMap<String, LibraryData> = mutableMapOf()
   private val libraryMapping: MutableMap<String, LibraryData> = mutableMapOf()
 
+  private val thirdPartyLibraries: Map<String, Map<String, Set<LibraryData>>>
+
   init {
+    val thirdPartyRoot = File("${projectRoot.absolutePath}/third_party")
+    val workspaceFile = File("${thirdPartyRoot.absolutePath}/workspace.bzl")
+
+    // Create a maps of libs
     val mapper = ObjectMapper()
     val factory = TypeFactory.defaultInstance()
     val type = factory.constructMapType(HashMap::class.java, String::class.java, Any::class.java)
-    val workspaceFile = File("${projectRoot.absolutePath}/third_party/workspace.bzl")
     for (line in workspaceFile.readLines()) {
       if (line.contains("""{"artifact": """")) {
         val artifact = mapper.readValue<Map<String, Any>>(line.trim(','), type)
         val bind = artifact["bind"] as String
         val name = artifact["name"] as String
         val url = artifact["url"] as String
+        val actual = artifact["actual"] as String
+        val artifactCoordinates = artifact["artifact"] as String
+        val (groupId, artifactId, version) = artifactCoordinates.split(":")
 
-        val (groupId, artifactId, version) = (artifact["artifact"] as String).split(":")
-        val libraryData = LibraryData(SYSTEM_ID, name)
+        val jarFile = File(url.replace("https://repo.maven.apache.org/maven2/", "/Users/sergey/.m2/repository/"))
+        val unresolved = !jarFile.exists()
+        if (unresolved) {
+          val libraryProperties = RepositoryLibraryProperties(
+            groupId,
+            artifactId,
+            version,
+            false,
+            emptyList()
+          )
+          JarRepositoryManager.loadDependenciesModal(
+            project,
+            libraryProperties,
+            false,
+            false,
+            jarFile.parentFile.absolutePath,
+            null
+          )
+        }
+
+        val libraryData = LibraryData(SYSTEM_ID, artifactCoordinates)
         libraryData.setGroup(groupId)
         libraryData.artifactId = artifactId
         libraryData.version = version
-        libraryData.addPath(
-          LibraryPathType.BINARY,
-          File(url.replace("https://repo.maven.apache.org/maven2/", "/Users/sergey/.m2/repository/")).absolutePath
-        )
+        libraryData.addPath(LibraryPathType.BINARY, jarFile.absolutePath)
+        val sourcePath = jarFile.absolutePath.substring(0, jarFile.absolutePath.length - 4) + "-sources.jar"
+        libraryData.addPath(LibraryPathType.SOURCE, sourcePath)
+
         libraryMapping[bind] = libraryData
+        actualLibraries[actual] = libraryData
         root.createChild(
           ProjectKeys.LIBRARY,
           libraryData
         )
+        println("adding library $groupId:$artifactId:$version")
       }
     }
-  }
 
-  fun getLib(dep: String): List<LibraryData> {
-    return cached.getOrPut(dep) {
-      val depPath = when (dep.contains(":")) {
-        true -> dep.substring(0, dep.lastIndexOf(':'))
-        else -> dep
-      }
-      val buildFile = File("${projectRoot.absoluteFile}$depPath/BUILD")
+    val thirdPartyMapping = thirdPartyRoot.walk()
+      .filter { it.name == "BUILD" }
+      .map { buildFile ->
+        val parsedBuildFile: Parser.ParseResult =
+          Parser.parseFile(
+            ParserInputSource.create(buildFile.readBytes(), PathFragment.create(buildFile.absolutePath)),
+            {})
+        val funCallExpressions = findAllLibDefinitions(parsedBuildFile)
 
-      val parsed: Parser.ParseResult =
-        Parser.parseFile(
-          ParserInputSource.create(buildFile.readBytes(), PathFragment.create(buildFile.absolutePath)),
-          {})
+        // libname -> list of exports
+        val libs: MutableMap<String, List<String>> = hashMapOf()
+        val javaLibs: List<List<Argument.Keyword>> = funCallExpressions
+          .filter { (it.function as? Identifier)?.name in listOf("java_library") }
+          .map { it.arguments.filterIsInstance<Argument.Keyword>() }
+        for (lib in javaLibs) {
+          var name: String? = null
+          var exports: List<String>? = null
 
-      val funCallExpressions = findAllLibDefinitions(parsed)
-      val libs = findAllAt(funCallExpressions, "java_library", "exports")
+          for (argument in lib) {
+            if (argument.name == "name") {
+              name = (argument.value as? StringLiteral)?.value
+            } else if (argument.name == "exports") {
+              val libList = argument.value
+              if (libList is ListLiteral) {
+                exports = libList.elements
+                  .filterIsInstance<StringLiteral>()
+                  .map { it.value }
+              }
+            }
+          }
 
-      val result = mutableListOf<LibraryData>()
-      for (lib in libs) {
-        if (lib.startsWith("//external:")) {
-          val defined = libraryMapping[lib.substring("//external:".length)]
-          if (defined != null) {
-            result.add(defined)
+          if (name != null && exports != null) {
+            libs[name] = exports
           } else {
-            println("oooopsie $lib")
+            println("Failed to process $lib")
+          }
+        }
+        buildFile.parentFile.relativeTo(thirdPartyRoot).path to libs
+      }
+      .toMap()
+
+    val thrirdPartyLibCache = mutableMapOf<String, MutableMap<String, Set<LibraryData>>>()
+    val ALL_LIBS_TEMPL = "&#^_ALL_LIBS!"
+
+    fun findLibraryData(path: String, name: String = ALL_LIBS_TEMPL): Set<LibraryData> {
+      val cachedLibs = thrirdPartyLibCache[path]?.get(name)
+      if (cachedLibs != null) {
+        return cachedLibs
+      }
+      val exports: List<String> = when (name) {
+        ALL_LIBS_TEMPL -> thirdPartyMapping[path]!!.flatMap { it.value }
+        else -> {
+          val allLibs = thirdPartyMapping[path]
+          if (allLibs == null) {
+            println("bug $name")
+            emptyList()
+          } else {
+            val exports = allLibs[name]
+            if (exports == null) {
+              println("bug $name")
+              emptyList()
+            } else {
+              exports
+            }
           }
         }
       }
-
-      return result
+      val libraries = hashSetOf<LibraryData>()
+      for (export in exports) {
+        when {
+          export.startsWith(":") -> {
+            libraries.addAll(findLibraryData(path, export.substring(1)))
+          }
+          export.startsWith("//external:") -> {
+            val defined = libraryMapping[export.substring("//external:".length)]!!
+            libraries.add(defined)
+          }
+          export.startsWith("//third_party/") -> {
+            if (export.contains(":")) {
+              val libPath = export.substring("//third_party/".length, export.lastIndexOf(':'))
+              val libName = export.substringAfter(':')
+              libraries.addAll(findLibraryData(libPath, libName))
+            } else {
+              val libPath = export.substring("//third_party/".length)
+              val libName = export.substringAfterLast('/')
+              libraries.addAll(findLibraryData(libPath, libName))
+            }
+          }
+          else -> {
+            println("What is $export?")
+          }
+        }
+      }
+      thrirdPartyLibCache
+        .computeIfAbsent(path, { hashMapOf() })
+        .put(name, libraries)
+      return libraries
     }
+
+    val result: MutableMap<String, MutableMap<String, Set<LibraryData>>> = hashMapOf()
+    for ((path, libDir: Map<String, List<String>>) in thirdPartyMapping) {
+      for ((name, _) in libDir) {
+        val libs = findLibraryData(path, name)
+        result
+          .computeIfAbsent(path, { hashMapOf() })
+          .put(name, libs)
+
+      }
+    }
+
+    thirdPartyLibraries = result
+  }
+
+  fun findThirdParty(dep: String): Set<LibraryData> {
+    if (dep.contains(":")) {
+      val libPath = dep.substring("//third_party/".length, dep.lastIndexOf(':'))
+      val libName = dep.substringAfter(':')
+      return thirdPartyLibraries[libPath]!![libName]!!
+    } else {
+      val libPath = dep.substring("//third_party/".length)
+      val libName = dep.substringAfterLast('/')
+      return thirdPartyLibraries[libPath]!![libName]!!
+    }
+  }
+
+  fun getActual(dep: String): LibraryData {
+    return actualLibraries[dep]!!
   }
 }
 
@@ -550,11 +718,9 @@ class BazilManager :
     Function { project: Project -> BazilSettings.getInstance(project) }
 
   override fun getExecutionSettingsProvider() =
-    Function<Pair<Project, String>, BazilExecutionSettings> { pair ->
-      val project = pair.first
-
-      val result = BazilExecutionSettings()
-      result
+    Function<Pair<Project, String>, BazilExecutionSettings> {
+      val project = it.first
+      BazilExecutionSettings(project)
     }
 
   override fun getExternalProjectDescriptor(): FileChooserDescriptor {
