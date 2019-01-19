@@ -33,9 +33,20 @@
         <registryKey key="system.in.process"
                      defaultValue="true"
                      description="Invalidate caches invalidates the cache data imported from external systems"/>
+
+        <projectService serviceImplementation="me.serce.bazillion.LibManager"/>
+        <attachSourcesProvider implementation="me.serce.bazillion.BazilAttachSourceProvider"/>
+
+        <toolWindow id="Bazil" anchor="right" icon="/icons/bazil.png"
+                    factoryClass="me.serce.bazillion.BazilToolWindowFactory"
+                    conditionClass="me.serce.bazillion.BazilToolWindowFactoryCondition"/>
     </extensions>
 
     <actions>
+        <action id="Bazil.RefreshAllProjects"
+                description="Refresh Bazil projects"
+                class="com.intellij.openapi.externalSystem.action.RefreshAllExternalProjectsAction"
+                icon="AllIcons.Actions.Refresh"/>
     </actions>
 
     <application-components>
