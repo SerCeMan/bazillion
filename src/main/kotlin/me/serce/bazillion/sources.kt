@@ -62,12 +62,12 @@ class BazilAttachSourceProvider : AbstractAttachSourceProvider() {
       }
     }
 
-    val libSourceDir = getLibrarySourceDir()
-
-    val sourceFile = File(libSourceDir, sourceFileName)
-
     val libCoords = libraries.first().name?.substring("Bazil: ".length) ?: return emptyList()
     val artifactUrl = libManager.getLibMeta(libCoords)?.source?.url ?: return emptyList()
+
+    // TODO: download to maven
+    val libSourceDir = getLibrarySourceDir()
+    val sourceFile = File(libSourceDir, sourceFileName)
 
     return setOf<AttachSourcesAction>(object : LightAttachSourcesAction {
       override fun getName() = "Download Bazil Sources..."

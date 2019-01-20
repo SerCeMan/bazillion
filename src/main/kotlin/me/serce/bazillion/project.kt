@@ -1,8 +1,5 @@
 package me.serce.bazillion
 
-import com.fasterxml.jackson.databind.DeserializationFeature
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import com.google.devtools.build.lib.syntax.*
 import com.google.devtools.build.lib.vfs.PathFragment
 import com.intellij.execution.configurations.SimpleJavaParameters
@@ -40,13 +37,14 @@ import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.projectRoots.JavaSdkVersionUtil
 import com.intellij.openapi.roots.DependencyScope
 import com.intellij.openapi.roots.LanguageLevelProjectExtension
+import com.intellij.openapi.startup.StartupActivity
 import com.intellij.openapi.util.registry.Registry
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.projectImport.ProjectOpenProcessorBase
 import com.intellij.util.Function
-import com.intellij.util.io.HttpRequests
 import com.intellij.util.messages.Topic
 import java.io.File
+import java.util.*
 
 val SYSTEM_ID = ProjectSystemId("BAZIL")
 val TOPIC = Topic.create<BazilSettingsListener>(
@@ -70,8 +68,24 @@ val a = run {
 
 interface BazilSettingsListener : ExternalSystemSettingsListener<BazilProjectSettings>
 
+@State(
+  name = "BazilSettings",
+  storages = [Storage("bazil.xml")]
+)
 class BazilSettings(project: Project) :
-  AbstractExternalSystemSettings<BazilSettings, BazilProjectSettings, BazilSettingsListener>(TOPIC, project) {
+  AbstractExternalSystemSettings<BazilSettings, BazilProjectSettings, BazilSettingsListener>(TOPIC, project),
+  PersistentStateComponent<BazilSettings.State> {
+
+  override fun loadState(state: BazilSettings.State) {
+    super.loadState(state)
+  }
+
+  override fun getState(): BazilSettings.State {
+    val state = State()
+    fillState(state)
+    return state
+  }
+
   companion object {
     fun getInstance(project: Project) = ServiceManager.getService<BazilSettings>(project, BazilSettings::class.java)
   }
@@ -79,6 +93,18 @@ class BazilSettings(project: Project) :
   override fun checkSettings(old: BazilProjectSettings, current: BazilProjectSettings) {}
   override fun copyExtraSettingsFrom(settings: BazilSettings) {}
   override fun subscribe(listener: ExternalSystemSettingsListener<BazilProjectSettings>) {}
+
+  data class State(
+    var linkedSettings: Set<BazilProjectSettings> = TreeSet()
+  ) : AbstractExternalSystemSettings.State<BazilProjectSettings> {
+    override fun getLinkedExternalProjectsSettings() = linkedSettings
+
+    override fun setLinkedExternalProjectsSettings(settings: Set<BazilProjectSettings>?) {
+      if (settings != null) {
+        linkedSettings = settings
+      }
+    }
+  }
 }
 
 class ImportFromBazilControl :
@@ -168,20 +194,6 @@ class BazilProjectOpenProcessor(importBuilder: BazilProjectImportBuilder) :
 class BazilProjectImportProvider(builder: BazilProjectImportBuilder) :
   AbstractExternalProjectImportProvider(builder, SYSTEM_ID)
 
-@State(
-  name = "BazilLocalSettings",
-  storages = [Storage(StoragePathMacros.CACHE_FILE)]
-)
-class BazilLocalSettings(project: Project) :
-  AbstractExternalSystemLocalSettings<BazilLocalSettings.State>(SYSTEM_ID, project, State())
-  , PersistentStateComponent<BazilLocalSettings.State> {
-  override fun loadState(state: State) {
-    super.loadState(state)
-  }
-
-  class State : AbstractExternalSystemLocalSettings.State()
-}
-
 class BazilExecutionSettings(val project: Project) : ExternalSystemExecutionSettings()
 
 // bazel structure
@@ -254,6 +266,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
 
       val project = settings!!.project
       val libManager = LibManager.getInstance(project)
+      libManager.refresh()
       for (lib in libManager.getAllLibs()) {
         root.createChild(ProjectKeys.LIBRARY, lib)
       }
@@ -376,6 +389,14 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
   override fun cancelTask(taskId: ExternalSystemTaskId, listener: ExternalSystemTaskNotificationListener) = true
 }
 
+@State(
+  name = "BazilLocalSettings",
+  storages = [Storage(StoragePathMacros.CACHE_FILE)]
+)
+class BazilLocalSettings(project: Project) :
+  AbstractExternalSystemLocalSettings<AbstractExternalSystemLocalSettings.State>(SYSTEM_ID, project, State()),
+  PersistentStateComponent<AbstractExternalSystemLocalSettings.State>
+
 
 enum class RuleKind(val funName: String) {
   JAVA_LIBRARY("java_library"),
@@ -396,106 +417,8 @@ data class Rule(
   val runtimeDeps: Set<AbstractNamedData>
 )
 
-class LibManager(private val project: Project) {
-  companion object {
-    fun getInstance(project: Project): LibManager = ServiceManager.getService(project, LibManager::class.java)
-  }
-
-  data class Sources(
-    val url: String,
-    val repository: String
-  )
-
-  data class LibMetadata(
-    val name: String,
-    val bind: String,
-    val actual: String,
-    val artifact: String,
-    val url: String,
-    val repository: String,
-    val source: Sources?
-  )
-
-  private val actualLibraries: MutableMap<String, LibraryData> = mutableMapOf()
-  private val libraryMapping: MutableMap<String, LibraryData> = mutableMapOf()
-  private val librariesMeta: MutableMap<String, LibMetadata> = mutableMapOf()
-  private val mapper: ObjectMapper = ObjectMapper()
-    .registerKotlinModule()
-    .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
-
-  init {
-    refresh()
-  }
-
-  fun getLibMapping(path: String) = libraryMapping[path]
-  fun getActualLib(path: String) = actualLibraries[path]
-  fun getLibMeta(path: String) = librariesMeta[path]
-  fun getAllLibs(): Collection<LibraryData> = libraryMapping.values
-
-  fun refresh() {
-    actualLibraries.clear()
-    librariesMeta.clear()
-    libraryMapping.clear()
-
-    val projectRoot = File(project.basePath)
-    val workspaceFiles = projectRoot.walk()
-      .onEnter { !isNonProjectDirectory(it) }
-      .filter { it.name == "workspace.bzl" }
-
-    val toDownload = arrayListOf<Pair<String, File>>()
-
-    // Create a maps of libs
-    for (workspaceFile in workspaceFiles) {
-      for (line in workspaceFile.readLines()) {
-        if (line.contains("""{"artifact": """")) {
-          val lib = mapper.readValue(line.trim(','), LibMetadata::class.java)
-          val (groupId, artifactId, version) = lib.artifact.split(":")
-
-          val jarFile = toLocalRepository(lib.url, lib.repository)
-          val unresolved = !jarFile.exists()
-          if (unresolved) {
-            toDownload.add(lib.url to jarFile)
-          }
-
-          val libraryData = LibraryData(SYSTEM_ID, lib.artifact).apply {
-            setGroup(groupId)
-            setArtifactId(artifactId)
-            setVersion(version)
-            addPath(LibraryPathType.BINARY, jarFile.absolutePath)
-          }
-
-          if (lib.source != null) {
-            val sourceJarFile = toLocalRepository(lib.source.url, lib.source.repository)
-            if (sourceJarFile.exists()) {
-              libraryData.addPath(LibraryPathType.SOURCE, sourceJarFile.absolutePath)
-            }
-          }
-
-          libraryMapping[lib.bind] = libraryData
-          actualLibraries[lib.actual] = libraryData
-          librariesMeta[lib.artifact] = lib
-          println("adding library $groupId:$artifactId:$version")
-        }
-      }
-    }
-
-    if (!toDownload.isEmpty()) {
-      for ((url, file) in toDownload) {
-        HttpRequests.request(url).saveToFile(file, null)
-      }
-    }
-  }
-
-  private fun toLocalRepository(url: String, repository: String) = File(
-    url.replace(
-      repository,
-      File(System.getProperty("user.home"), ".m2/repository/").absolutePath + "/"
-    )
-  )
-}
-
-private fun isNonProjectDirectory(it: File) =
-  it.name.startsWith("bazel-") || it.name == "node_modules" || it.name == "out"
+fun isNonProjectDirectory(it: File) = it.isDirectory && (
+  it.name.startsWith("bazel-") || it.name == "node_modules" || it.name == "out" || it.name == "target")
 
 
 class RuleManager(project: Project, projectRoot: File) {
@@ -512,9 +435,7 @@ class RuleManager(project: Project, projectRoot: File) {
     )
 
     val ruleMapping = projectRoot.walk()
-      .onEnter {
-        !it.name.startsWith("bazel-") && it.name != "node_modules" && it.name != "out"
-      }
+      .onEnter { !isNonProjectDirectory(it) }
       .filter { it.name == "BUILD" }
       .map { buildFile ->
         val parsedBuildFile: Parser.ParseResult =
@@ -654,8 +575,10 @@ class BazilTaskManager : ExternalSystemTaskManager<BazilExecutionSettings> {
   override fun cancelTask(id: ExternalSystemTaskId, listener: ExternalSystemTaskNotificationListener) = true
 }
 
-class BazilManager :
+class BazilManager : StartupActivity,
   ExternalSystemManager<BazilProjectSettings, BazilSettingsListener, BazilSettings, BazilLocalSettings, BazilExecutionSettings> {
+  override fun runActivity(project: Project) {}
+
   override fun enhanceRemoteProcessing(parameters: SimpleJavaParameters) {}
   override fun getProjectResolverClass() = BazilProjectResolver::class.java
   override fun getSettingsProvider() = Function { project: Project ->
@@ -674,4 +597,5 @@ class BazilManager :
   override fun getLocalSettingsProvider() = Function<Project, BazilLocalSettings> { project ->
     ServiceManager.getService<BazilLocalSettings>(project, BazilLocalSettings::class.java)
   }
+
 }
