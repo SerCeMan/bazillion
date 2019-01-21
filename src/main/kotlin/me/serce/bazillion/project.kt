@@ -32,6 +32,8 @@ import com.intellij.openapi.externalSystem.util.PaintAwarePanel
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.module.JavaModuleType
 import com.intellij.openapi.module.ModuleTypeId
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressIndicatorProvider
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.projectRoots.JavaSdkVersionUtil
@@ -52,7 +54,7 @@ val TOPIC = Topic.create<BazilSettingsListener>(
   BazilSettingsListener::class.java
 )
 
-private val LOG = Logger.getInstance("#me.serce.bazillion")
+val LOG = Logger.getInstance("#me.serce.bazillion")
 
 class BazilProjectSettings : ExternalProjectSettings() {
   override fun clone(): BazilProjectSettings {
@@ -70,7 +72,7 @@ interface BazilSettingsListener : ExternalSystemSettingsListener<BazilProjectSet
 
 @State(
   name = "BazilSettings",
-  storages = [Storage("bazil.xml")]
+  storages = [Storage(StoragePathMacros.WORKSPACE_FILE)]
 )
 class BazilSettings(project: Project) :
   AbstractExternalSystemSettings<BazilSettings, BazilProjectSettings, BazilSettingsListener>(TOPIC, project),
@@ -87,7 +89,8 @@ class BazilSettings(project: Project) :
   }
 
   companion object {
-    fun getInstance(project: Project) = ServiceManager.getService<BazilSettings>(project, BazilSettings::class.java)
+    fun getInstance(project: Project): BazilSettings =
+      ServiceManager.getService<BazilSettings>(project, BazilSettings::class.java)
   }
 
   override fun checkSettings(old: BazilProjectSettings, current: BazilProjectSettings) {}
@@ -196,17 +199,7 @@ class BazilProjectImportProvider(builder: BazilProjectImportBuilder) :
 
 class BazilExecutionSettings(val project: Project) : ExternalSystemExecutionSettings()
 
-// bazel structure
-
-data class ModuleInfo(
-  val data: DataNode<ModuleData>
-)
-
-val modules: MutableMap<String, ModuleInfo> = mutableMapOf()
-
 class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSettings> {
-//  private val myCancellationMap = MultiMap.create<ExternalSystemTaskId, CancellationTokenSource>()
-
   override fun resolveProjectInfo(
     id: ExternalSystemTaskId,
     projectPath: String,
@@ -215,140 +208,114 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
     listener: ExternalSystemTaskNotificationListener
   ): DataNode<ProjectData> {
 
-    modules.clear()
+    val modules: MutableMap<String, DataNode<ModuleData>> = mutableMapOf()
+
+    val projectRoot = File(projectPath)
+    val projectName = projectRoot.name
+    val projectData = ProjectData(SYSTEM_ID, projectName, projectPath, projectPath)
+    val projectDataNode: DataNode<ProjectData> = DataNode(ProjectKeys.PROJECT, projectData, null)
+
+    // let's assume that root doesn't have any code
+    val root = projectDataNode
+      .createChild(
+        ProjectKeys.MODULE, ModuleData(
+          projectName, SYSTEM_ID, ModuleTypeId.JAVA_MODULE,
+          projectName, projectPath, projectPath
+        )
+      )
+      .createChild(ProjectKeys.CONTENT_ROOT, ContentRootData(SYSTEM_ID, projectPath))
+
+    for (bazelOut in listOf(
+      "$projectPath/bazel-bin",
+      "$projectPath/bazel-${projectName}",
+      "$projectPath/bazel-genfiles",
+      "$projectPath/bazel-out",
+      "$projectPath/bazel-testlogs"
+    )) {
+      root.data.storePath(ExternalSystemSourceType.EXCLUDED, bazelOut)
+    }
 
     if (isPreviewMode) {
-      // Create project preview model w/o building the project model
-      // * Slow project open
-      // * Ability to open an invalid projects (e.g. with errors in build scripts)
-      val projectName = File(projectPath).name
-      val projectData = ProjectData(SYSTEM_ID, projectName, projectPath, projectPath)
-      val projectDataNode = DataNode(ProjectKeys.PROJECT, projectData, null)
-
-      val root = projectDataNode
-        .createChild(
-          ProjectKeys.MODULE, ModuleData(
-            projectName, SYSTEM_ID, ModuleTypeId.JAVA_MODULE,
-            projectName, projectPath, projectPath
-          )
-        )
-        .createChild(ProjectKeys.CONTENT_ROOT, ContentRootData(SYSTEM_ID, projectPath))
-
-      for (bazelOut in listOf(
-        "$projectPath/bazel-bin",
-        "$projectPath/bazel-${projectName}",
-        "$projectPath/bazel-genfiles",
-        "$projectPath/bazel-out",
-        "$projectPath/bazel-testlogs"
-      )) {
-        root.data.storePath(ExternalSystemSourceType.EXCLUDED, bazelOut)
-      }
-
-      return projectDataNode
-    } else {
-      val projectRoot = File(projectPath)
-      val projectName = projectRoot.name
-      val projectData = ProjectData(SYSTEM_ID, projectName, projectPath, projectPath)
-      val projectDataNode: DataNode<ProjectData> = DataNode(ProjectKeys.PROJECT, projectData, null)
-
-      // let's assume that root doesn't have any code
-      val root = projectDataNode
-        .createChild(
-          ProjectKeys.MODULE, ModuleData(
-            projectName, SYSTEM_ID, ModuleTypeId.JAVA_MODULE,
-            projectName, projectPath, projectPath
-          )
-        )
-        .createChild(ProjectKeys.CONTENT_ROOT, ContentRootData(SYSTEM_ID, projectPath))
-
-      for (bazelOut in listOf(
-        "$projectPath/bazel-bin",
-        "$projectPath/bazel-${projectName}",
-        "$projectPath/bazel-genfiles",
-        "$projectPath/bazel-out",
-        "$projectPath/bazel-testlogs"
-      )) {
-        root.data.storePath(ExternalSystemSourceType.EXCLUDED, bazelOut)
-      }
-
-      for (child in projectRoot.listFiles()) {
-        collectProjects(projectRoot, child, root)
-      }
-
-      val project = settings!!.project
-      val libManager = LibManager.getInstance(project)
-      libManager.refresh()
-      for (lib in libManager.getAllLibs()) {
-        root.createChild(ProjectKeys.LIBRARY, lib)
-      }
-      val ruleManager = RuleManager(project, projectRoot)
-
-      // reprocess modules
-      modules.forEach { id, (moduleNode: DataNode<ModuleData>) ->
-
-        println("processing module $id")
-
-        val rules = ruleManager.getRules(id)
-        if (rules != null) {
-          for ((name, rule) in rules) {
-            when {
-              rule.kind == RuleKind.JUNIT_TESTS || name == "test-lib" -> {
-                for (dep in sequenceOf(rule.deps, rule.exports, rule.runtimeDeps).flatten()) {
-                  when (dep) {
-                    is LibraryData -> moduleNode.createChild(
-                      ProjectKeys.LIBRARY_DEPENDENCY,
-                      LibraryDependencyData(moduleNode.data, dep, LibraryLevel.PROJECT).apply {
-                        scope = DependencyScope.TEST
-                      }
-                    )
-                    is ModuleData -> moduleNode.createChild(
-                      ProjectKeys.MODULE_DEPENDENCY,
-                      ModuleDependencyData(moduleNode.data, dep).apply {
-                        scope = DependencyScope.TEST
-                      }
-                    )
-                    else -> TODO("unsupported $dep")
-                  }
-                }
-              }
-              rule.kind in listOf(RuleKind.JAVA_LIBRARY, RuleKind.JAVA_BINARY, RuleKind.DATANUCLEUS_JAVA_LIBRARY) -> {
-                for (dep in sequenceOf(rule.deps, rule.exports, rule.runtimeDeps).flatten()) {
-                  when (dep) {
-                    is LibraryData -> moduleNode.createChild(
-                      ProjectKeys.LIBRARY_DEPENDENCY,
-                      LibraryDependencyData(moduleNode.data, dep, LibraryLevel.PROJECT)
-                    )
-                    is ModuleData -> moduleNode.createChild(
-                      ProjectKeys.MODULE_DEPENDENCY,
-                      ModuleDependencyData(moduleNode.data, dep)
-                    )
-                    else -> TODO("unsupported $dep")
-                  }
-                }
-              }
-              rule.kind in listOf(RuleKind.GEN_RULE) -> {
-                // do nothing
-              }
-              else -> TODO("what is ${rule.kind}")
-            }
-          }
-        } else {
-          println("bug package path $id")
-        }
-      }
-
-      println("DOOOONE")
-
       return projectDataNode
     }
+
+    val progress: ProgressIndicator = ProgressIndicatorProvider.getInstance().progressIndicator
+    progress.text = "collecting projects"
+    LOG.info("collecting projects")
+    collectProjects(modules, projectRoot, projectRoot, root)
+
+    val project = settings!!.project
+    val libManager = LibManager.getInstance(project)
+    libManager.refresh(progress)
+    for (lib in libManager.getAllLibs()) {
+      root.createChild(ProjectKeys.LIBRARY, lib)
+    }
+    val ruleManager = RuleManager(project, projectRoot, modules)
+
+    // reprocess modules
+    progress.text = "updating module dependencies"
+    modules.forEach { id, moduleNode: DataNode<ModuleData> ->
+
+      LOG.info("processing module $id")
+
+      val rules = ruleManager.getRules(id)
+      if (rules != null) {
+        for ((name, rule) in rules) {
+          when {
+            rule.kind == RuleKind.JUNIT_TESTS || name == "test-lib" -> {
+              for (dep in sequenceOf(rule.deps, rule.exports, rule.runtimeDeps).flatten()) {
+                when (dep) {
+                  is LibraryData -> moduleNode.createChild(
+                    ProjectKeys.LIBRARY_DEPENDENCY,
+                    LibraryDependencyData(moduleNode.data, dep, LibraryLevel.PROJECT).apply {
+                      scope = DependencyScope.TEST
+                    }
+                  )
+                  is ModuleData -> moduleNode.createChild(
+                    ProjectKeys.MODULE_DEPENDENCY,
+                    ModuleDependencyData(moduleNode.data, dep).apply {
+                      scope = DependencyScope.TEST
+                    }
+                  )
+                  else -> TODO("unsupported $dep")
+                }
+              }
+            }
+            rule.kind in listOf(RuleKind.JAVA_LIBRARY, RuleKind.JAVA_BINARY, RuleKind.DATANUCLEUS_JAVA_LIBRARY) -> {
+              for (dep in sequenceOf(rule.deps, rule.exports, rule.runtimeDeps).flatten()) {
+                when (dep) {
+                  is LibraryData -> moduleNode.createChild(
+                    ProjectKeys.LIBRARY_DEPENDENCY,
+                    LibraryDependencyData(moduleNode.data, dep, LibraryLevel.PROJECT)
+                  )
+                  is ModuleData -> moduleNode.createChild(
+                    ProjectKeys.MODULE_DEPENDENCY,
+                    ModuleDependencyData(moduleNode.data, dep)
+                  )
+                  else -> TODO("unsupported $dep")
+                }
+              }
+            }
+            rule.kind in listOf(RuleKind.GEN_RULE) -> {
+              // do nothing
+            }
+            else -> TODO("what is ${rule.kind}")
+          }
+        }
+      } else {
+        LOG.error("bug package path $id")
+      }
+    }
+    return projectDataNode
   }
 
   private fun collectProjects(
+    modules: MutableMap<String, DataNode<ModuleData>>,
     projectRoot: File,
     root: File,
     node: DataNode<ContentRootData>
   ) {
-    if (!root.isDirectory || isNonProjectDirectory(root)) {
+    if (isNonProjectDirectory(root)) {
       return
     }
     val projectName = root.name
@@ -363,6 +330,9 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
       if (child.name == "src" && child.isDirectory) {
         srcFolder = true
       }
+      if (bazelRoot && srcFolder) {
+        break
+      }
     }
     if (bazelRoot && srcFolder) {
       val id = "//${File(projectPath).relativeTo(projectRoot)}"
@@ -373,11 +343,17 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
         )
       )
 
-      modules[id] = ModuleInfo(module)
+      modules[id] = module
 
-      val content: DataNode<ContentRootData> = module
-        .createChild(ProjectKeys.CONTENT_ROOT, ContentRootData(SYSTEM_ID, projectPath))
+      module.data.apply {
+        isInheritProjectCompileOutputPath = false
+        setCompileOutputPath(ExternalSystemSourceType.SOURCE, "$projectPath/target/classes")
+        setCompileOutputPath(ExternalSystemSourceType.TEST, "$projectPath/target/test-classes")
+        setCompileOutputPath(ExternalSystemSourceType.RESOURCE, "$projectPath/target/classes")
+        setCompileOutputPath(ExternalSystemSourceType.TEST_RESOURCE, "$projectPath/target/test-classes")
+      }
 
+      val content = module.createChild(ProjectKeys.CONTENT_ROOT, ContentRootData(SYSTEM_ID, projectPath))
       content.data.apply {
         storePath(ExternalSystemSourceType.SOURCE, "$projectPath/src/main/java")
         storePath(ExternalSystemSourceType.RESOURCE, "$projectPath/src/main/resources")
@@ -387,16 +363,11 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
         storePath(ExternalSystemSourceType.EXCLUDED, "$projectPath/target")
       }
 
-      module.data.setCompileOutputPath(ExternalSystemSourceType.SOURCE, "$projectPath/target/classes")
-      module.data.setCompileOutputPath(ExternalSystemSourceType.TEST, "$projectPath/target/test-classes")
-      module.data.setCompileOutputPath(ExternalSystemSourceType.RESOURCE, "$projectPath/target/classes")
-      module.data.setCompileOutputPath(ExternalSystemSourceType.TEST_RESOURCE, "$projectPath/target/test-classes")
-
-      module.data.isInheritProjectCompileOutputPath = false
-
     } else {
       for (child in files) {
-        collectProjects(projectRoot, child, node)
+        if (child.isDirectory) {
+          collectProjects(modules, projectRoot, child, node)
+        }
       }
     }
   }
@@ -434,10 +405,18 @@ data class Rule(
 )
 
 fun isNonProjectDirectory(it: File) = it.isDirectory && (
-  it.name.startsWith("bazel-") || it.name == "node_modules" || it.name == "out" || it.name == "target")
+  it.name.startsWith(".") ||
+    it.name.startsWith("bazel-") ||
+    it.name == "node_modules" ||
+    it.name == "out" ||
+    it.name == "target")
 
 
-class RuleManager(project: Project, projectRoot: File) {
+class RuleManager(
+  project: Project,
+  projectRoot: File,
+  modules: MutableMap<String, DataNode<ModuleData>>
+) {
   private val rules: Map<String, Map<String, Rule>>
 
   init {
@@ -450,6 +429,7 @@ class RuleManager(project: Project, projectRoot: File) {
       val runtimeDeps: List<String>
     )
 
+    LOG.info("searching for BUILDs")
     val ruleMapping = projectRoot.walk()
       .onEnter { !isNonProjectDirectory(it) }
       .filter { it.name == "BUILD" }
@@ -517,7 +497,7 @@ class RuleManager(project: Project, projectRoot: File) {
       val runtimeDeps = hashSetOf<AbstractNamedData>()
 
       // if I'm the module then I add myself everywhere
-      val moduleData = modules[path]?.data?.data
+      val moduleData = modules[path]?.data
       if (moduleData != null) {
         deps.add(moduleData)
       }
@@ -566,6 +546,7 @@ class RuleManager(project: Project, projectRoot: File) {
       fillDeps(exports, rawRule.exports, { it.exports })
 
       val rule = Rule(rawRule.kind, exports, deps, runtimeDeps)
+      LOG.info("processed rule $path:$name")
       ruleCache
         .computeIfAbsent(path, { hashMapOf() })
         .put(name, rule)

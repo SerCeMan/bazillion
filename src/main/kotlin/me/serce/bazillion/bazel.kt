@@ -7,13 +7,16 @@ import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import com.intellij.openapi.components.*
 import com.intellij.openapi.externalSystem.model.project.LibraryData
 import com.intellij.openapi.externalSystem.model.project.LibraryPathType
+import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.project.Project
 import com.intellij.util.io.HttpRequests
+import me.serce.bazillion.LibManager.LibMetadata
+import me.serce.bazillion.LibManager.Sources
 import java.io.File
 
 @State(
   name = "BazilLibManager",
-  storages = [Storage("bazil_libs.xml")]
+  storages = [Storage(StoragePathMacros.WORKSPACE_FILE)]
 )
 class LibManager(private val project: Project) : PersistentStateComponent<LibManager.State> {
   companion object {
@@ -43,16 +46,15 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
     .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
   private val actualLibraries: MutableMap<String, LibraryData> = mutableMapOf()
-  private var librariesMeta: MutableMap<String, LibMetadata> = mutableMapOf()
+  private val librariesMeta: MutableMap<String, LibMetadata> = mutableMapOf()
   private val libraryMapping: MutableMap<String, LibraryData> = mutableMapOf()
 
-  override fun getState(): State {
-    return State(mapper.writeValueAsString(librariesMeta))
-  }
+  override fun getState() = State(mapper.writeValueAsString(librariesMeta))
 
   override fun loadState(state: State) {
     if (state.json.isNotEmpty()) {
-      librariesMeta = mapper.readValue(state.json)
+      librariesMeta.clear()
+      librariesMeta.putAll(mapper.readValue(state.json))
     }
   }
 
@@ -61,7 +63,7 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
   fun getLibMeta(path: String) = librariesMeta[path]
   fun getAllLibs(): Collection<LibraryData> = libraryMapping.values
 
-  fun refresh() {
+  fun refresh(progress: ProgressIndicator) {
     actualLibraries.clear()
     librariesMeta.clear()
     libraryMapping.clear()
@@ -71,19 +73,20 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
       .onEnter { !isNonProjectDirectory(it) }
       .filter { it.name == "workspace.bzl" }
 
-    val toDownload = arrayListOf<Pair<String, File>>()
+    val toDownload = arrayListOf<Pair<LibMetadata, File>>()
 
     // Create a maps of libs
+    progress.text = "updating third parties"
     for (workspaceFile in workspaceFiles) {
       for (line in workspaceFile.readLines()) {
         if (line.contains("""{"artifact": """")) {
           val lib = mapper.readValue(line.trim(','), LibMetadata::class.java)
           val (groupId, artifactId, version) = lib.artifact.split(":")
 
-          val jarFile = toLocalRepository(lib.url, lib.repository)
+          val jarFile = lib.localJar()
           val unresolved = !jarFile.exists()
           if (unresolved) {
-            toDownload.add(lib.url to jarFile)
+            toDownload.add(lib to jarFile)
           }
 
           val libraryData = LibraryData(SYSTEM_ID, lib.artifact).apply {
@@ -93,32 +96,39 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
             addPath(LibraryPathType.BINARY, jarFile.absolutePath)
           }
 
-          if (lib.source != null) {
-            val sourceJarFile = toLocalRepository(lib.source.url, lib.source.repository)
-            if (sourceJarFile.exists()) {
-              libraryData.addPath(LibraryPathType.SOURCE, sourceJarFile.absolutePath)
+          val sources = lib.source
+          if (sources != null) {
+            val localSourceJar = sources.localSourceJar()
+            if (localSourceJar.exists()) {
+              libraryData.addPath(LibraryPathType.SOURCE, localSourceJar.absolutePath)
             }
           }
 
           libraryMapping[lib.bind] = libraryData
           actualLibraries[lib.actual] = libraryData
           librariesMeta[lib.artifact] = lib
-          println("adding library $groupId:$artifactId:$version")
         }
       }
     }
 
+    LOG.info("resolving libraries")
+    progress.text = "resolving libraries"
     if (!toDownload.isEmpty()) {
-      for ((url, file) in toDownload) {
-        HttpRequests.request(url).saveToFile(file, null)
+      for ((lib, file) in toDownload) {
+        progress.text2 = "downloading ${lib.artifact}"
+        HttpRequests.request(lib.url).saveToFile(file, progress)
       }
     }
+    LOG.info("libraries resolved")
   }
-
-  private fun toLocalRepository(url: String, repository: String) = File(
-    url.replace(
-      repository,
-      File(System.getProperty("user.home"), ".m2/repository/").absolutePath + "/"
-    )
-  )
 }
+
+private fun toLocalRepository(url: String, repository: String) = File(
+  url.replace(
+    repository,
+    File(System.getProperty("user.home"), ".m2/repository/").absolutePath + "/"
+  )
+)
+
+fun LibMetadata.localJar(): File = toLocalRepository(url, repository)
+fun Sources.localSourceJar(): File = toLocalRepository(url, repository)
