@@ -2,6 +2,7 @@ package me.serce.bazillion
 
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import com.intellij.openapi.components.*
 import com.intellij.openapi.externalSystem.model.project.LibraryData
@@ -12,13 +13,15 @@ import java.io.File
 
 @State(
   name = "BazilLibManager",
-  storages = [Storage(StoragePathMacros.CACHE_FILE)]
+  storages = [Storage("bazil_libs.xml")]
 )
 class LibManager(private val project: Project) : PersistentStateComponent<LibManager.State> {
   companion object {
     fun getInstance(project: Project): LibManager =
       ServiceManager.getService(project, LibManager::class.java)
   }
+
+  data class State(var json: String = "")
 
   class Sources(
     val url: String,
@@ -35,32 +38,33 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
     val source: Sources?
   )
 
-  override fun getState() = state
-
-  override fun loadState(state: State) {
-    this.state = state
-  }
-
-  class State(
-    val actualLibraries: MutableMap<String, LibraryData> = mutableMapOf(),
-    val libraryMapping: MutableMap<String, LibraryData> = mutableMapOf(),
-    val librariesMeta: MutableMap<String, LibMetadata> = mutableMapOf()
-  )
-
   private val mapper: ObjectMapper = ObjectMapper()
     .registerKotlinModule()
     .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
-  private var state: State = State()
 
-  fun getLibMapping(path: String) = state.libraryMapping[path]
-  fun getActualLib(path: String) = state.actualLibraries[path]
-  fun getLibMeta(path: String) = state.librariesMeta[path]
-  fun getAllLibs(): Collection<LibraryData> = state.libraryMapping.values
+  private val actualLibraries: MutableMap<String, LibraryData> = mutableMapOf()
+  private var librariesMeta: MutableMap<String, LibMetadata> = mutableMapOf()
+  private val libraryMapping: MutableMap<String, LibraryData> = mutableMapOf()
+
+  override fun getState(): State {
+    return State(mapper.writeValueAsString(librariesMeta))
+  }
+
+  override fun loadState(state: State) {
+    if (state.json.isNotEmpty()) {
+      librariesMeta = mapper.readValue(state.json)
+    }
+  }
+
+  fun getLibMapping(path: String) = libraryMapping[path]
+  fun getActualLib(path: String) = actualLibraries[path]
+  fun getLibMeta(path: String) = librariesMeta[path]
+  fun getAllLibs(): Collection<LibraryData> = libraryMapping.values
 
   fun refresh() {
-    state.actualLibraries.clear()
-    state.librariesMeta.clear()
-    state.libraryMapping.clear()
+    actualLibraries.clear()
+    librariesMeta.clear()
+    libraryMapping.clear()
 
     val projectRoot = File(project.basePath)
     val workspaceFiles = projectRoot.walk()
@@ -96,9 +100,9 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
             }
           }
 
-          state.libraryMapping[lib.bind] = libraryData
-          state.actualLibraries[lib.actual] = libraryData
-          state.librariesMeta[lib.artifact] = lib
+          libraryMapping[lib.bind] = libraryData
+          actualLibraries[lib.actual] = libraryData
+          librariesMeta[lib.artifact] = lib
           println("adding library $groupId:$artifactId:$version")
         }
       }

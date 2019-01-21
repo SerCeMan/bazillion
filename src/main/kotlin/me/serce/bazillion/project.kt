@@ -225,7 +225,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
       val projectData = ProjectData(SYSTEM_ID, projectName, projectPath, projectPath)
       val projectDataNode = DataNode(ProjectKeys.PROJECT, projectData, null)
 
-      projectDataNode
+      val root = projectDataNode
         .createChild(
           ProjectKeys.MODULE, ModuleData(
             projectName, SYSTEM_ID, ModuleTypeId.JAVA_MODULE,
@@ -233,6 +233,17 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
           )
         )
         .createChild(ProjectKeys.CONTENT_ROOT, ContentRootData(SYSTEM_ID, projectPath))
+
+      for (bazelOut in listOf(
+        "$projectPath/bazel-bin",
+        "$projectPath/bazel-${projectName}",
+        "$projectPath/bazel-genfiles",
+        "$projectPath/bazel-out",
+        "$projectPath/bazel-testlogs"
+      )) {
+        root.data.storePath(ExternalSystemSourceType.EXCLUDED, bazelOut)
+      }
+
       return projectDataNode
     } else {
       val projectRoot = File(projectPath)
@@ -315,6 +326,9 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
                   }
                 }
               }
+              rule.kind in listOf(RuleKind.GEN_RULE) -> {
+                // do nothing
+              }
               else -> TODO("what is ${rule.kind}")
             }
           }
@@ -370,14 +384,15 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
         storePath(ExternalSystemSourceType.RESOURCE, "$projectPath/src/main/webapp")
         storePath(ExternalSystemSourceType.TEST, "$projectPath/src/test/java")
         storePath(ExternalSystemSourceType.TEST_RESOURCE, "$projectPath/src/test/resources")
+        storePath(ExternalSystemSourceType.EXCLUDED, "$projectPath/target")
       }
 
-//      module.data.setCompileOutputPath(ExternalSystemSourceType.SOURCE, "$projectPath/target/classes")
-//      module.data.setCompileOutputPath(ExternalSystemSourceType.RESOURCE, "$projectPath/target/classes")
-//      module.data.setCompileOutputPath(ExternalSystemSourceType.TEST, "$projectPath/target/test-classes")
-//      module.data.setCompileOutputPath(ExternalSystemSourceType.TEST_RESOURCE, "$projectPath/target/test-classes")
+      module.data.setCompileOutputPath(ExternalSystemSourceType.SOURCE, "$projectPath/target/classes")
+      module.data.setCompileOutputPath(ExternalSystemSourceType.TEST, "$projectPath/target/test-classes")
+      module.data.setCompileOutputPath(ExternalSystemSourceType.RESOURCE, "$projectPath/target/classes")
+      module.data.setCompileOutputPath(ExternalSystemSourceType.TEST_RESOURCE, "$projectPath/target/test-classes")
 
-//      module.data.isInheritProjectCompileOutputPath = false
+      module.data.isInheritProjectCompileOutputPath = false
 
     } else {
       for (child in files) {
@@ -402,7 +417,8 @@ enum class RuleKind(val funName: String) {
   JAVA_LIBRARY("java_library"),
   JAVA_BINARY("java_binary"),
   DATANUCLEUS_JAVA_LIBRARY("datanucleus_java_library"),
-  JUNIT_TESTS("junit_tests");
+  JUNIT_TESTS("junit_tests"),
+  GEN_RULE("genrule");
 
   companion object {
     val index: Map<String, RuleKind> = values().map { it.funName to it }.toMap()
