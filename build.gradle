@@ -14,6 +14,9 @@ plugins {
 
 repositories {
     jcenter()
+    maven {
+        url  "https://dl.bintray.com/serce/bazillion"
+    }
 }
 
 apply plugin: 'kotlin'
@@ -49,6 +52,5 @@ dependencies {
     compile "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
     compile "org.jetbrains.kotlin:kotlin-reflect:$kotlin_version"
     compile "com.fasterxml.jackson.module:jackson-module-kotlin:2.9.+"
-
-    compile files('lib/syntaxbin_deploy.jar')
+    compile "me.serce:bazel_syntax:0.0.1"
 }
