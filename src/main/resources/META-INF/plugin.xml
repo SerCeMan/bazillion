@@ -30,10 +30,6 @@
         <projectService serviceImplementation="me.serce.bazillion.BazilSettings"/>
         <projectService serviceImplementation="me.serce.bazillion.BazilLocalSettings"/>
 
-        <registryKey key="system.in.process"
-                     defaultValue="true"
-                     description="Invalidate caches invalidates the cache data imported from external systems"/>
-
         <projectService serviceImplementation="me.serce.bazillion.LibManager"/>
         <attachSourcesProvider implementation="me.serce.bazillion.BazilAttachSourceProvider"/>
 

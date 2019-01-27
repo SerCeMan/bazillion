@@ -29,6 +29,7 @@ import com.intellij.openapi.externalSystem.task.ExternalSystemTaskManager
 import com.intellij.openapi.externalSystem.util.ExternalSystemApiUtil
 import com.intellij.openapi.externalSystem.util.ExternalSystemSettingsControl
 import com.intellij.openapi.externalSystem.util.PaintAwarePanel
+import com.intellij.openapi.fileChooser.FileChooserDescriptor
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.module.JavaModuleType
 import com.intellij.openapi.module.ModuleTypeId
@@ -64,6 +65,7 @@ class BazilProjectSettings : ExternalProjectSettings() {
   }
 }
 
+// Allows for running in the same process
 val a = run {
   Registry.addKey("BAZIL.system.in.process", "", true, false)
 }
@@ -78,8 +80,9 @@ class BazilSettings(project: Project) :
   AbstractExternalSystemSettings<BazilSettings, BazilProjectSettings, BazilSettingsListener>(TOPIC, project),
   PersistentStateComponent<BazilSettings.State> {
 
-  override fun loadState(state: BazilSettings.State) {
-    super.loadState(state)
+  companion object {
+    fun getInstance(project: Project): BazilSettings =
+      ServiceManager.getService<BazilSettings>(project, BazilSettings::class.java)
   }
 
   override fun getState(): BazilSettings.State {
@@ -88,9 +91,8 @@ class BazilSettings(project: Project) :
     return state
   }
 
-  companion object {
-    fun getInstance(project: Project): BazilSettings =
-      ServiceManager.getService<BazilSettings>(project, BazilSettings::class.java)
+  override fun loadState(state: BazilSettings.State) {
+    super.loadState(state)
   }
 
   override fun checkSettings(old: BazilProjectSettings, current: BazilProjectSettings) {}
@@ -227,7 +229,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
 
     for (bazelOut in listOf(
       "$projectPath/bazel-bin",
-      "$projectPath/bazel-${projectName}",
+      "$projectPath/bazel-$projectName",
       "$projectPath/bazel-genfiles",
       "$projectPath/bazel-out",
       "$projectPath/bazel-testlogs"
@@ -254,11 +256,11 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
 
     // reprocess modules
     progress.text = "updating module dependencies"
-    modules.forEach { id, moduleNode: DataNode<ModuleData> ->
+    modules.forEach { moduleIdd, moduleNode: DataNode<ModuleData> ->
 
-      LOG.info("processing module $id")
+      LOG.info("processing module $moduleIdd")
 
-      val rules = ruleManager.getRules(id)
+      val rules = ruleManager.getRules(moduleIdd)
       if (rules != null) {
         for ((name, rule) in rules) {
           when {
@@ -309,7 +311,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
           }
         }
       } else {
-        LOG.warn("Missing rules in the module $id. ")
+        LOG.warn("Missing rules in the module $moduleIdd. ")
       }
     }
     return projectDataNode
@@ -606,7 +608,9 @@ class BazilManager : StartupActivity,
       BazilExecutionSettings(project)
     }
 
-  override fun getExternalProjectDescriptor() = FileChooserDescriptorFactory.createSingleFileDescriptor()
+  override fun getExternalProjectDescriptor(): FileChooserDescriptor =
+    FileChooserDescriptorFactory.createSingleFileDescriptor()
+
   override fun getSystemId() = SYSTEM_ID
   override fun getTaskManagerClass() = BazilTaskManager::class.java
   override fun getLocalSettingsProvider() = Function<Project, BazilLocalSettings> { project ->
