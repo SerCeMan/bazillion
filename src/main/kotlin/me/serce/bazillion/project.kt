@@ -277,7 +277,9 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
                       scope = DependencyScope.TEST
                     }
                   )
-                  else -> TODO("unsupported $dep")
+                  else -> {
+                    LOG.error("Unsupported dependency $dep for unit tests")
+                  }
                 }
               }
             }
@@ -292,18 +294,22 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
                     ProjectKeys.MODULE_DEPENDENCY,
                     ModuleDependencyData(moduleNode.data, dep)
                   )
-                  else -> TODO("unsupported $dep")
+                  else -> {
+                    LOG.error("Unsupported dependency $dep for java module")
+                  }
                 }
               }
             }
             rule.kind in listOf(RuleKind.GEN_RULE) -> {
               // do nothing
             }
-            else -> TODO("what is ${rule.kind}")
+            else -> {
+              LOG.error("Unknown rule ${rule.kind}")
+            }
           }
         }
       } else {
-        LOG.error("bug package path $id")
+        LOG.warn("Missing rules in the module $id. ")
       }
     }
     return projectDataNode
@@ -512,19 +518,27 @@ class RuleManager(
         rawList: List<String>,
         extractor: (Rule) -> Set<AbstractNamedData>
       ) {
-        for (dep in rawList) {
+        deploop@ for (dep in rawList) {
           when {
             dep.startsWith("@") -> {
-              val library = libManager.getActualLib(dep) ?: TODO("missing $dep")
-              deps.add(library)
+              val library = libManager.getActualLib(dep)
+              if (library != null) {
+                deps.add(library)
+              } else {
+                LOG.warn("Can't find dependency '$dep' in the list of libraries")
+              }
             }
             dep.startsWith(":") -> {
               val depRule = findRule(path, dep.substring(1))
               deps.addAll(extractor(depRule))
             }
             dep.startsWith("//external:") -> {
-              val defined = libManager.getLibMapping(dep.substring("//external:".length)) ?: TODO("missing $dep")
-              deps.add(defined)
+              val library = libManager.getLibMapping(dep.substring("//external:".length))
+              if (library != null) {
+                deps.add(library)
+              } else {
+                LOG.warn("Can't find external dependency '$dep' in the list of libraries")
+              }
             }
             else -> {
               val thirdPartyRule = if (dep.contains(":")) {
@@ -546,7 +560,7 @@ class RuleManager(
       fillDeps(exports, rawRule.exports, { it.exports })
 
       val rule = Rule(rawRule.kind, exports, deps, runtimeDeps)
-      LOG.info("processed rule $path:$name")
+      LOG.info("Processed rule $path:$name")
       ruleCache
         .computeIfAbsent(path, { hashMapOf() })
         .put(name, rule)
