@@ -300,7 +300,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
                 }
               }
             }
-            rule.kind in listOf(RuleKind.GEN_RULE) -> {
+            rule.kind in listOf(RuleKind.GEN_RULE, RuleKind.DUMMY) -> {
               // do nothing
             }
             else -> {
@@ -395,7 +395,8 @@ enum class RuleKind(val funName: String) {
   JAVA_BINARY("java_binary"),
   DATANUCLEUS_JAVA_LIBRARY("datanucleus_java_library"),
   JUNIT_TESTS("junit_tests"),
-  GEN_RULE("genrule");
+  GEN_RULE("genrule"),
+  DUMMY("dummy$");
 
   companion object {
     val index: Map<String, RuleKind> = values().map { it.funName to it }.toMap()
@@ -497,10 +498,13 @@ class RuleManager(
       if (cachedRule != null) {
         return cachedRule
       }
-      val rawRule: RawRule = ruleMapping[path]?.get(name) ?: TODO("bug $name")
       val exports = hashSetOf<AbstractNamedData>()
       val deps = hashSetOf<AbstractNamedData>()
       val runtimeDeps = hashSetOf<AbstractNamedData>()
+      val rawRule: RawRule = ruleMapping[path]?.get(name) ?: run {
+        LOG.error("Unable to find the rule under '$path' with name '$name'")
+        RawRule(RuleKind.DUMMY, emptyList(), emptyList(), emptyList())
+      }
 
       // if I'm the module then I add myself everywhere
       val moduleData = modules[path]?.data
@@ -518,7 +522,7 @@ class RuleManager(
         rawList: List<String>,
         extractor: (Rule) -> Set<AbstractNamedData>
       ) {
-        deploop@ for (dep in rawList) {
+        for (dep in rawList) {
           when {
             dep.startsWith("@") -> {
               val library = libManager.getActualLib(dep)
@@ -570,10 +574,10 @@ class RuleManager(
     val result: MutableMap<String, MutableMap<String, Rule>> = hashMapOf()
     for ((path, libDir: Map<String, *>) in ruleMapping) {
       for ((name, _) in libDir) {
-        val libs = findRule(path, name)
+        val rule = findRule(path, name)
         result
           .computeIfAbsent(path, { hashMapOf() })
-          .put(name, libs)
+          .put(name, rule)
       }
     }
     rules = result
