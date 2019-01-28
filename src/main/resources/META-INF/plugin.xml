@@ -1,17 +1,28 @@
 <idea-plugin version="2">
     <id>me.serce.bazillon</id>
-    <name>Intellij-Bazillion</name>
+    <name>Bazillion</name>
     <vendor email="sergeicelov@gmail.com">Intellij Bazillion</vendor>
 
     <description><![CDATA[
-        Bazel plugin that's actually fast
-        ddddddd
+      Bazillion is an opinionated alternative Bazel plugin for IntelliJ IDEA.
+
+      <p>
+        You can support the plugin development by clicking star on <a href="https://github.com/SerCeMan/bazillion">GitHub</a>,
+        and the developers of Bazillion enjoy nice stouts.
+      </p>
+      <p>
+        Contributions are always welcome!
+      </p>
     ]]></description>
 
     <change-notes><![CDATA[
-      Bazel plugin that's actually fast
-        ddddddd
-        No changes
+      <p>
+        <b>v0.0.1</b>
+        <ul>
+          <li>Importing project</li>
+          <li>Support for 3rd party dependencies</li>
+        </ul>
+      </p>
     ]]>
     </change-notes>
 

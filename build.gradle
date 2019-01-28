@@ -36,7 +36,6 @@ runIde {
 }
 
 group 'me.serce'
-version '0.0.1-SNAPSHOT'
 
 intellij {
     pluginName 'Intellij-Bazillion'
@@ -46,6 +45,12 @@ intellij {
     updateSinceUntilBuild = false
 
     sandboxDirectory project.rootDir.canonicalPath + "/.sandbox"
+}
+
+release {
+    newVersionCommitMessage = '[Bazillion Release] - '
+    preTagCommitMessage = '[Bazillion Release] - pre tag commit: '
+    buildTasks = ['buildPlugin']
 }
 
 dependencies {
