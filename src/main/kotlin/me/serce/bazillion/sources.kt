@@ -10,6 +10,8 @@ import com.intellij.openapi.application.WriteAction
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
+import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.LibraryOrderEntry
 import com.intellij.openapi.roots.OrderRootType
 import com.intellij.openapi.roots.libraries.Library
@@ -92,7 +94,7 @@ class BazilAttachSourceProvider : AbstractAttachSourceProvider() {
             }
           }
 
-          override fun onSuccess() = attachSourceJar(sourceFile, libraries)
+          override fun onSuccess() = attachSourceJar(sourceFile, libraries, project)
 
           private fun showMessage(title: String, message: String, notificationType: NotificationType) {
             Notification("Source searcher", title, message, notificationType).notify(getProject())
@@ -104,7 +106,11 @@ class BazilAttachSourceProvider : AbstractAttachSourceProvider() {
     })
   }
 
-  fun attachSourceJar(sourceJar: File, libraries: Collection<Library>) {
+  fun attachSourceJar(
+    sourceJar: File,
+    libraries: Collection<Library>,
+    project: Project
+  ) {
     val srcFile = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(sourceJar) ?: return
     val jarRoot = JarFileSystem.getInstance().getJarRootForLocalFile(srcFile) ?: return
 
@@ -115,21 +121,28 @@ class BazilAttachSourceProvider : AbstractAttachSourceProvider() {
     if (roots.isEmpty()) {
       roots = arrayOf(jarRoot)
     }
-    doAttachSourceJars(libraries, roots)
+    doAttachSourceJars(libraries, roots, project)
   }
 
-  private fun doAttachSourceJars(libraries: Collection<Library>, roots: Array<VirtualFile>) {
-    WriteAction.run<RuntimeException> {
-      for (library in libraries) {
-        val model = library.modifiableModel
-        val alreadyExistingFiles: HashSet<VirtualFile> = hashSetOf(*model.getFiles(OrderRootType.SOURCES))
+  private fun doAttachSourceJars(
+    libraries: Collection<Library>,
+    roots: Array<VirtualFile>,
+    project: Project
+  ) {
+    // Adding sources might cause a dialog to pop-up which can't be shown in the dumb mode
+    DumbService.getInstance(project).runWhenSmart {
+      WriteAction.run<RuntimeException> {
+        for (library in libraries) {
+          val model = library.modifiableModel
+          val alreadyExistingFiles: HashSet<VirtualFile> = hashSetOf(*model.getFiles(OrderRootType.SOURCES))
 
-        for (root in roots) {
-          if (!alreadyExistingFiles.contains(root)) {
-            model.addRoot(root, OrderRootType.SOURCES)
+          for (root in roots) {
+            if (!alreadyExistingFiles.contains(root)) {
+              model.addRoot(root, OrderRootType.SOURCES)
+            }
           }
+          model.commit()
         }
-        model.commit()
       }
     }
   }
