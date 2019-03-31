@@ -69,7 +69,9 @@ class BazilAttachSourceProvider : AbstractAttachSourceProvider() {
 
     val sourceFile = sources.localSourceJar()
 
-    return setOf<AttachSourcesAction>(object : LightAttachSourcesAction {
+    // The returned action can not be light, or otherwise it might be displaced by
+    // other actions, e.g. decompile actions from the scala plugin
+    return setOf<AttachSourcesAction>(object : AttachSourcesAction {
       override fun getName() = "Download Bazil Sources..."
 
       override fun getBusyText() = "Searching..."
