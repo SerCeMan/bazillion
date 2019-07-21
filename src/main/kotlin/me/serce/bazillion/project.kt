@@ -561,7 +561,7 @@ class RuleManager(
           }
         }
       }
-      fillDeps(deps, rawRule.deps, { it.deps + it.exports })
+      fillDeps(deps, rawRule.deps + rawRule.exports, { it.deps + it.exports })
       fillDeps(runtimeDeps, rawRule.runtimeDeps, { it.runtimeDeps + it.exports })
       fillDeps(exports, rawRule.exports, { it.exports })
 
