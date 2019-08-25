@@ -13,6 +13,7 @@ import com.intellij.util.io.HttpRequests
 import me.serce.bazillion.LibManager.LibMetadata
 import me.serce.bazillion.LibManager.Sources
 import java.io.File
+import java.net.URL
 
 @State(
   name = "BazilLibManager",
@@ -38,7 +39,10 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
     val artifact: String,
     val url: String,
     val repository: String,
-    val source: Sources?
+    val source: Sources?,
+    // these are only filled in maven_install
+    val dependenciesStr: List<String> = arrayListOf(),
+    val dependencies: MutableList<LibraryData> = arrayListOf()
   )
 
   private val mapper: ObjectMapper = ObjectMapper()
@@ -69,47 +73,12 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
     libraryMapping.clear()
 
     val projectRoot = File(project.basePath)
-    val workspaceFiles = projectRoot.walk()
-      .onEnter { !isNonProjectDirectory(it) }
-      .filter { it.name == "workspace.bzl" }
-
     val toDownload = arrayListOf<Pair<LibMetadata, File>>()
-
     // Create a maps of libs
     progress.text = "updating third parties"
-    for (workspaceFile in workspaceFiles) {
-      for (line in workspaceFile.readLines()) {
-        if (line.contains("""{"artifact": """")) {
-          val lib = mapper.readValue(line.trim(','), LibMetadata::class.java)
-          val (groupId, artifactId, version) = lib.artifact.split(":")
 
-          val jarFile = lib.localJar()
-          val unresolved = !jarFile.exists()
-          if (unresolved) {
-            toDownload.add(lib to jarFile)
-          }
-
-          val libraryData = LibraryData(SYSTEM_ID, lib.artifact).apply {
-            setGroup(groupId)
-            setArtifactId(artifactId)
-            setVersion(version)
-            addPath(LibraryPathType.BINARY, jarFile.absolutePath)
-          }
-
-          val sources = lib.source
-          if (sources != null) {
-            val localSourceJar = sources.localSourceJar()
-            if (localSourceJar.exists()) {
-              libraryData.addPath(LibraryPathType.SOURCE, localSourceJar.absolutePath)
-            }
-          }
-
-          libraryMapping[lib.bind] = libraryData
-          actualLibraries[lib.actual] = libraryData
-          librariesMeta[lib.artifact] = lib
-        }
-      }
-    }
+    collectMavenInstalls(projectRoot, toDownload)
+    collectThirdParties(projectRoot, toDownload)
 
     LOG.info("resolving libraries")
     progress.text = "resolving libraries"
@@ -120,6 +89,123 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
       }
     }
     LOG.info("libraries resolved")
+  }
+
+  private fun collectMavenInstalls(
+    projectRoot: File,
+    toDownload: ArrayList<Pair<LibMetadata, File>>
+  ) {
+    val mavenInstallFiles = projectRoot.walk()
+      .onEnter { !isNonProjectDirectory(it) }
+      .filter { it.name == "maven_install.json" }
+
+    for (mavenInstall in mavenInstallFiles) {
+      val depFile = mapper.readValue<Map<String, Map<String, Any>>>(mavenInstall)["dependency_tree"] as Map<String, Any>
+      val dependencies = depFile["dependencies"] as List<Map<String, Any>>
+      for (dep in dependencies) {
+        val coords = dep["coord"] as String
+        if (coords.contains(":sources:")) {
+          val artifactCoords = coords.replace(":jar:sources", "")
+          val lib = librariesMeta[artifactCoords]
+          if (lib == null || dep["url"] == null) {
+            LOG.warn("Can't attach sources for '$artifactCoords'")
+            continue
+          }
+          librariesMeta[artifactCoords] = lib.copy(
+            source = Sources(
+              dep["url"] as String,
+              lib.repository
+            )
+          )
+          continue
+        }
+
+        val url = dep["url"] as String
+        val repository = "https://${URL(url).host}"
+        val name = coordsToName(coords)
+        val lib = LibMetadata(
+          name,
+          name,
+          "@maven//:$name",
+          coords,
+          url,
+          repository,
+          null,
+          dependenciesStr = dep["dependencies"] as List<String>
+        )
+
+        addLibrary(lib, toDownload)
+      }
+    }
+    for ((_, lib) in librariesMeta) {
+      for (dependencyCoord in lib.dependenciesStr) {
+        val name = coordsToName(dependencyCoord)
+        val libraryData = libraryMapping[name]
+        if (libraryData == null) {
+          LOG.warn("Can't find library data mapping: $name")
+          continue
+        }
+        lib.dependencies.add(libraryData)
+      }
+    }
+  }
+
+  private fun coordsToName(coords: String): String {
+    val (groupId, artifactId, _) = coords.split(":")
+    val name = "${groupId}_$artifactId"
+      .replace('.', '_')
+      .replace('-', '_')
+    return name
+  }
+
+  private fun collectThirdParties(
+    projectRoot: File,
+    toDownload: ArrayList<Pair<LibMetadata, File>>
+  ) {
+    val workspaceFiles = projectRoot.walk()
+      .onEnter { !isNonProjectDirectory(it) }
+      .filter { it.name == "workspace.bzl" }
+
+    for (workspaceFile in workspaceFiles) {
+      for (line in workspaceFile.readLines()) {
+        if (line.contains("""{"artifact": """")) {
+          val lib = mapper.readValue(line.trim(','), LibMetadata::class.java)
+          addLibrary(lib, toDownload)
+        }
+      }
+    }
+  }
+
+  private fun addLibrary(
+    lib: LibMetadata,
+    toDownload: ArrayList<Pair<LibMetadata, File>>
+  ) {
+    val (groupId, artifactId, version) = lib.artifact.split(":")
+
+    val jarFile = lib.localJar()
+    val unresolved = !jarFile.exists()
+    if (unresolved) {
+      toDownload.add(lib to jarFile)
+    }
+
+    val libraryData = LibraryData(SYSTEM_ID, lib.artifact).apply {
+      setGroup(groupId)
+      setArtifactId(artifactId)
+      setVersion(version)
+      addPath(LibraryPathType.BINARY, jarFile.absolutePath)
+    }
+
+    val sources = lib.source
+    if (sources != null) {
+      val localSourceJar = sources.localSourceJar()
+      if (localSourceJar.exists()) {
+        libraryData.addPath(LibraryPathType.SOURCE, localSourceJar.absolutePath)
+      }
+    }
+
+    libraryMapping[lib.bind] = libraryData
+    actualLibraries[lib.actual] = libraryData
+    librariesMeta[lib.artifact] = lib
   }
 }
 

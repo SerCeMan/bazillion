@@ -515,8 +515,16 @@ class RuleManager(
       }
       // add junit to all unit tests
       if (rawRule.kind == RuleKind.JUNIT_TESTS) {
-        val junit = findRule("//third_party/jvm/junit", "junit")
-        deps.addAll(junit.exports)
+        val library = libManager.getActualLib("@maven//:junit_junit")
+        val lib = library?.let { libManager.getLibMeta(it.externalName) }
+        if (library != null && lib != null) {
+          deps.add(library)
+          deps.addAll(lib.dependencies)
+        } else {
+          LOG.warn("Can't find dependency 'junit_junit' in the list of libraries")
+          val junit = findRule("//third_party/jvm/junit", "junit")
+          deps.addAll(junit.exports)
+        }
       }
 
       fun fillDeps(
@@ -526,6 +534,21 @@ class RuleManager(
       ) {
         for (dep in rawList) {
           when {
+            dep.startsWith("@maven//:") -> {
+              val library = libManager.getActualLib(dep)
+              if (library == null) {
+                LOG.warn("Can't find dependency '$dep' in the list of libraries")
+              } else {
+                val artifact = library.externalName
+                val lib = libManager.getLibMeta(artifact)
+                if (lib != null) {
+                  deps.add(library)
+                  deps.addAll(lib.dependencies)
+                } else {
+                  LOG.warn("Can't find dependency '$dep' in the list of libraries")
+                }
+              }
+            }
             dep.startsWith("@") -> {
               val library = libManager.getActualLib(dep)
               if (library != null) {

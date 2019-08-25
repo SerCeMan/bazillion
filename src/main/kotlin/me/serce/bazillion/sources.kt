@@ -1,7 +1,6 @@
 package me.serce.bazillion
 
 import com.intellij.codeInsight.AttachSourcesProvider.AttachSourcesAction
-import com.intellij.codeInsight.AttachSourcesProvider.LightAttachSourcesAction
 import com.intellij.jarFinder.AbstractAttachSourceProvider
 import com.intellij.jarFinder.InternetAttachSourceProvider
 import com.intellij.notification.Notification
