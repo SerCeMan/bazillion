@@ -515,15 +515,14 @@ class RuleManager(
       }
       // add junit to all unit tests
       if (rawRule.kind == RuleKind.JUNIT_TESTS) {
-        val library = libManager.getActualLib("@maven//:junit_junit")
-        val lib = library?.let { libManager.getLibMeta(it.externalName) }
-        if (library != null && lib != null) {
-          deps.add(library)
-          deps.addAll(lib.dependencies)
-        } else {
-          LOG.warn("Can't find dependency 'junit_junit' in the list of libraries")
-          val junit = findRule("//third_party/jvm/junit", "junit")
-          deps.addAll(junit.exports)
+        listOf(
+          "@maven//:junit_junit",
+          "@maven//:org_hamcrest_hamcrest_core"
+        ).mapNotNull {
+          val depName = it.substring("@maven//:".length)
+          libManager.getActualLib(depName) ?: run { LOG.warn("Can't find dependency '$it' in the list of libraries"); null }
+        }.forEach { library ->
+          libManager.getLibMeta(library.externalName)?.let { deps.addAll(it.allDependencies) }
         }
       }
 
@@ -535,39 +534,25 @@ class RuleManager(
         for (dep in rawList) {
           when {
             dep.startsWith("@maven//:") -> {
-              val library = libManager.getActualLib(dep)
-              if (library == null) {
-                LOG.warn("Can't find dependency '$dep' in the list of libraries")
-              } else {
+              val depName = dep.substring("@maven//:".length)
+              libManager.getActualLib(depName)?.let { library ->
                 val artifact = library.externalName
                 val lib = libManager.getLibMeta(artifact)
                 if (lib != null) {
-                  deps.add(library)
-                  deps.addAll(lib.dependencies)
+                  deps.addAll(lib.allDependencies)
                 } else {
                   LOG.warn("Can't find dependency '$dep' in the list of libraries")
                 }
+              } ?: run {
+                LOG.warn("Can't find dependency '$dep' in the list of libraries")
               }
             }
             dep.startsWith("@") -> {
-              val library = libManager.getActualLib(dep)
-              if (library != null) {
-                deps.add(library)
-              } else {
-                LOG.warn("Can't find dependency '$dep' in the list of libraries")
-              }
+              LOG.warn("Can't handle dependency '$dep' for the list of libraries")
             }
             dep.startsWith(":") -> {
               val depRule = findRule(path, dep.substring(1))
               deps.addAll(extractor(depRule))
-            }
-            dep.startsWith("//external:") -> {
-              val library = libManager.getLibMapping(dep.substring("//external:".length))
-              if (library != null) {
-                deps.add(library)
-              } else {
-                LOG.warn("Can't find external dependency '$dep' in the list of libraries")
-              }
             }
             else -> {
               val thirdPartyRule = if (dep.contains(":")) {
@@ -637,7 +622,7 @@ class BazilManager : StartupActivity,
   override fun getSystemId() = SYSTEM_ID
   override fun getTaskManagerClass() = BazilTaskManager::class.java
   override fun getLocalSettingsProvider() = Function<Project, BazilLocalSettings> { project ->
-    ServiceManager.getService<BazilLocalSettings>(project, BazilLocalSettings::class.java)
+    ServiceManager.getService(project, BazilLocalSettings::class.java)
   }
 
 }

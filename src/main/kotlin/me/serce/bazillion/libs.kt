@@ -13,7 +13,6 @@ import com.intellij.util.io.HttpRequests
 import me.serce.bazillion.LibManager.LibMetadata
 import me.serce.bazillion.LibManager.Sources
 import java.io.File
-import java.net.URL
 
 @State(
   name = "BazilLibManager",
@@ -27,22 +26,19 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
 
   data class State(var json: String = "")
 
-  class Sources(
+  data class Sources(
     val url: String,
     val repository: String
   )
 
   data class LibMetadata(
     val name: String,
-    val bind: String,
-    val actual: String,
-    val artifact: String,
+    val coords: String,
     val url: String,
     val repository: String,
     val source: Sources?,
-    // these are only filled in maven_install
     val dependenciesStr: List<String> = arrayListOf(),
-    val dependencies: MutableList<LibraryData> = arrayListOf()
+    val allDependencies: MutableList<LibraryData> = arrayListOf()
   )
 
   private val mapper: ObjectMapper = ObjectMapper()
@@ -51,7 +47,6 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
 
   private val actualLibraries: MutableMap<String, LibraryData> = mutableMapOf()
   private val librariesMeta: MutableMap<String, LibMetadata> = mutableMapOf()
-  private val libraryMapping: MutableMap<String, LibraryData> = mutableMapOf()
 
   override fun getState() = State(mapper.writeValueAsString(librariesMeta))
 
@@ -62,15 +57,13 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
     }
   }
 
-  fun getLibMapping(path: String) = libraryMapping[path]
   fun getActualLib(path: String) = actualLibraries[path]
   fun getLibMeta(path: String) = librariesMeta[path]
-  fun getAllLibs(): Collection<LibraryData> = libraryMapping.values
+  fun getAllLibs(): Collection<LibraryData> = actualLibraries.values
 
   fun refresh(progress: ProgressIndicator) {
     actualLibraries.clear()
     librariesMeta.clear()
-    libraryMapping.clear()
 
     val projectRoot = File(project.basePath)
     val toDownload = arrayListOf<Pair<LibMetadata, File>>()
@@ -78,13 +71,12 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
     progress.text = "updating third parties"
 
     collectMavenInstalls(projectRoot, toDownload)
-    collectThirdParties(projectRoot, toDownload)
 
     LOG.info("resolving libraries")
     progress.text = "resolving libraries"
-    if (!toDownload.isEmpty()) {
+    if (toDownload.isNotEmpty()) {
       for ((lib, file) in toDownload) {
-        progress.text2 = "downloading ${lib.artifact}"
+        progress.text2 = "downloading ${lib.coords}"
         HttpRequests.request(lib.url).saveToFile(file, progress)
       }
     }
@@ -121,12 +113,16 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
         }
 
         val url = dep["url"] as String
-        val repository = "https://${URL(url).host}"
+        val (groupId, artifactId, version) = coords.split(":")
+        val endIndex = url.indexOf("${groupId.replace('.', '/')}/")
+        if (endIndex == -1) {
+          LOG.warn("Corrupted dependency url doesn't contain artifact groupid: $url")
+          continue
+        }
+        val repository = url.substring(0, endIndex)
         val name = coordsToName(coords)
         val lib = LibMetadata(
           name,
-          name,
-          "@maven//:$name",
           coords,
           url,
           repository,
@@ -134,78 +130,44 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
           dependenciesStr = dep["dependencies"] as List<String>
         )
 
-        addLibrary(lib, toDownload)
+        val jarFile = lib.localJar()
+        val unresolved = !jarFile.exists()
+        if (unresolved) {
+          toDownload.add(lib to jarFile)
+        }
+        val libraryData = LibraryData(SYSTEM_ID, lib.coords).apply {
+          setGroup(groupId)
+          setArtifactId(artifactId)
+          setVersion(version)
+          addPath(LibraryPathType.BINARY, jarFile.absolutePath)
+        }
+        val sources = lib.source
+        if (sources != null) {
+          val localSourceJar = sources.localSourceJar()
+          if (localSourceJar.exists()) {
+            libraryData.addPath(LibraryPathType.SOURCE, localSourceJar.absolutePath)
+          }
+        }
+        lib.allDependencies.add(libraryData)
+        actualLibraries[lib.name] = libraryData
+        librariesMeta[lib.coords] = lib
       }
     }
     for ((_, lib) in librariesMeta) {
       for (dependencyCoord in lib.dependenciesStr) {
-        val name = coordsToName(dependencyCoord)
-        val libraryData = libraryMapping[name]
+        val libraryData = actualLibraries[coordsToName(dependencyCoord)]
         if (libraryData == null) {
-          LOG.warn("Can't find library data mapping: $name")
+          LOG.warn("Can't find library data mapping: $dependencyCoord")
           continue
         }
-        lib.dependencies.add(libraryData)
+        lib.allDependencies.add(libraryData)
       }
     }
   }
 
   private fun coordsToName(coords: String): String {
     val (groupId, artifactId, _) = coords.split(":")
-    val name = "${groupId}_$artifactId"
-      .replace('.', '_')
-      .replace('-', '_')
-    return name
-  }
-
-  private fun collectThirdParties(
-    projectRoot: File,
-    toDownload: ArrayList<Pair<LibMetadata, File>>
-  ) {
-    val workspaceFiles = projectRoot.walk()
-      .onEnter { !isNonProjectDirectory(it) }
-      .filter { it.name == "workspace.bzl" }
-
-    for (workspaceFile in workspaceFiles) {
-      for (line in workspaceFile.readLines()) {
-        if (line.contains("""{"artifact": """")) {
-          val lib = mapper.readValue(line.trim(','), LibMetadata::class.java)
-          addLibrary(lib, toDownload)
-        }
-      }
-    }
-  }
-
-  private fun addLibrary(
-    lib: LibMetadata,
-    toDownload: ArrayList<Pair<LibMetadata, File>>
-  ) {
-    val (groupId, artifactId, version) = lib.artifact.split(":")
-
-    val jarFile = lib.localJar()
-    val unresolved = !jarFile.exists()
-    if (unresolved) {
-      toDownload.add(lib to jarFile)
-    }
-
-    val libraryData = LibraryData(SYSTEM_ID, lib.artifact).apply {
-      setGroup(groupId)
-      setArtifactId(artifactId)
-      setVersion(version)
-      addPath(LibraryPathType.BINARY, jarFile.absolutePath)
-    }
-
-    val sources = lib.source
-    if (sources != null) {
-      val localSourceJar = sources.localSourceJar()
-      if (localSourceJar.exists()) {
-        libraryData.addPath(LibraryPathType.SOURCE, localSourceJar.absolutePath)
-      }
-    }
-
-    libraryMapping[lib.bind] = libraryData
-    actualLibraries[lib.actual] = libraryData
-    librariesMeta[lib.artifact] = lib
+    return "${groupId}_$artifactId".replace('.', '_').replace('-', '_')
   }
 }
 

@@ -79,7 +79,7 @@ class BazilAttachSourceProvider : AbstractAttachSourceProvider() {
         val task = object : Task.Modal(psiFile.project, "Searching source...", true) {
           override fun run(indicator: ProgressIndicator) {
             try {
-              indicator.text = "Downloading sources for ${lib.artifact}"
+              indicator.text = "Downloading sources for ${lib.coords}"
               val tmpDownload = Files.createTempFile("bazil-dwnl-${lib.name}", "*.tmp").toFile()
               tmpDownload.deleteOnExit()
               HttpRequests.request(artifactUrl).saveToFile(tmpDownload, indicator)
