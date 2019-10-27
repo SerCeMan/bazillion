@@ -14,6 +14,15 @@ Bazillion chooses the other side of the tradeoff and builds the IntelliJ project
 * The files in each module should be places according to the [standard directory layout](https://maven.apache.org/guides/introduction/introduction-to-the-standard-directory-layout.html).
 * [external dependencies](https://github.com/bazelbuild/rules_jvm_external) should be used as the 3rd party dependency provider.  
 
+## Installation
+
+The plugin can be installed from a custom IJ plugin repository. To install the plugin, you can follow [these instructions](https://www.jetbrains.com/help/idea/managing-plugins.html#repos). 
+
+Repository URL:
+```
+https://raw.githubusercontent.com/SerCeMan/bazillion/master/updatePlugins.xml
+```
+
 ## Current status
 
 This plugin is in alpha stage.
