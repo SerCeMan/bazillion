@@ -256,11 +256,9 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
 
     // reprocess modules
     progress.text = "updating module dependencies"
-    modules.forEach { moduleIdd, moduleNode: DataNode<ModuleData> ->
-
-      LOG.info("processing module $moduleIdd")
-
-      val rules = ruleManager.getRules(moduleIdd)
+    modules.forEach { (moduleId, moduleNode: DataNode<ModuleData>) ->
+      LOG.info("processing module $moduleId")
+      val rules = ruleManager.getRulesByPrefix(moduleId)
       if (rules != null) {
         for ((name, rule) in rules) {
           when {
@@ -302,7 +300,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
                 }
               }
             }
-            rule.kind in listOf(RuleKind.GEN_RULE, RuleKind.DUMMY) -> {
+            rule.kind in listOf(RuleKind.GEN_RULE, RuleKind.DUMMY, RuleKind.COMPILE_SOY) -> {
               // do nothing
             }
             else -> {
@@ -311,7 +309,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
           }
         }
       } else {
-        LOG.warn("Missing rules in the module $moduleIdd. ")
+        LOG.warn("Missing rules in the module $moduleId. ")
       }
     }
     return projectDataNode
@@ -328,7 +326,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
     }
     val projectName = root.name
     val projectPath = root.absolutePath
-    val files = root.listFiles()
+    val files = root.listFiles() ?: arrayOf()
     var bazelRoot = false
     var srcFolder = false
     for (child in files) {
@@ -392,17 +390,18 @@ class BazilLocalSettings(project: Project) :
   PersistentStateComponent<AbstractExternalSystemLocalSettings.State>
 
 
-enum class RuleKind(val funName: String) {
+enum class RuleKind(vararg val names: String) {
   JAVA_LIBRARY("java_library"),
   JAVA_BINARY("java_binary"),
   DATANUCLEUS_JAVA_LIBRARY("datanucleus_java_library"),
-  JUNIT_TESTS("junit_tests"),
+  JUNIT_TESTS("java_test", "junit_tests"),
   GEN_RULE("genrule"),
-  DUMMY("dummy$");
+  DUMMY("dummy$"),
+  COMPILE_SOY("compile_soy");
 
   companion object {
-    val index: Map<String, RuleKind> = values().map { it.funName to it }.toMap()
-    fun byFunName(funName: String): RuleKind? = index[funName]
+    private val index: Map<String, RuleKind> = values().flatMap { rule -> rule.names.map { it to rule } }.toMap()
+    fun byFunName(name: String): RuleKind? = index[name]
   }
 }
 
@@ -520,7 +519,8 @@ class RuleManager(
           "@maven//:org_hamcrest_hamcrest_core"
         ).mapNotNull {
           val depName = it.substring("@maven//:".length)
-          libManager.getActualLib(depName) ?: run { LOG.warn("Can't find dependency '$it' in the list of libraries"); null }
+          libManager.getActualLib(depName)
+            ?: run { LOG.warn("Can't find dependency '$it' in the list of libraries"); null }
         }.forEach { library ->
           libManager.getLibMeta(library.externalName)?.let { deps.addAll(it.allDependencies) }
         }
@@ -594,6 +594,10 @@ class RuleManager(
   }
 
   fun getRules(packagePath: String): Map<String, Rule>? = rules[packagePath]
+  fun getRulesByPrefix(packagePrefix: String): Map<String, Rule>? = rules.entries
+    .filter { it.key.startsWith(packagePrefix) }
+    .flatMap { it.value.entries.map { entry -> entry.key to entry.value } }
+    .toMap()
 }
 
 class BazilTaskManager : ExternalSystemTaskManager<BazilExecutionSettings> {
