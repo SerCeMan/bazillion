@@ -171,7 +171,13 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
   }
 
   private fun coordsToName(coords: String): String {
-    val (groupId, artifactId, _) = coords.split(":")
+    val parts = coords.split(":")
+    val groupId: String = parts[0]
+    var artifactId: String = parts[1]
+    if (parts.size == 5) {
+      val classifier = parts[3]
+      artifactId += "_$classifier"
+    }
     return "${groupId}_$artifactId".replace('.', '_').replace('-', '_')
   }
 }
