@@ -155,6 +155,8 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
         }
         lib.allDependencies.add(libraryData)
         actualLibraries[lib.name] = libraryData
+        // well, suddenly this is allowed too.
+        actualLibraries["${lib.name}_${version.replace(".", "_")}"] = libraryData
         librariesMeta[lib.coords] = lib
       }
     }
