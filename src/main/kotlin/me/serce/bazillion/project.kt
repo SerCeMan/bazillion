@@ -377,6 +377,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
         storePath(ExternalSystemSourceType.RESOURCE, "$projectPath/src/main/resources")
         storePath(ExternalSystemSourceType.RESOURCE, "$projectPath/src/main/webapp")
         storePath(ExternalSystemSourceType.TEST, "$projectPath/src/test/java")
+        storePath(ExternalSystemSourceType.TEST_GENERATED, "$projectPath/src/test/java_generated")
         storePath(ExternalSystemSourceType.TEST_RESOURCE, "$projectPath/src/test/resources")
         storePath(ExternalSystemSourceType.EXCLUDED, "$projectPath/target")
       }

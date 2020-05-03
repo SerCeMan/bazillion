@@ -148,8 +148,8 @@ class BazilAttachSourceProvider : AbstractAttachSourceProvider() {
     }
   }
 
-  private fun isRootInExistingFile(root: VirtualFile) = when {
-    root.fileSystem is JarFileSystem -> {
+  private fun isRootInExistingFile(root: VirtualFile) = when (root.fileSystem) {
+    is JarFileSystem -> {
       val jar = JarFileSystem.getInstance().getVirtualFileForJar(root)
       // we might be invoked outside EDT, so sync VFS refresh is impossible, so we check java.io.File existence
       !(jar == null || !VfsUtilCore.virtualToIoFile(jar).exists())
