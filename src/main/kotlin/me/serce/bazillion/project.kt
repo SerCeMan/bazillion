@@ -37,6 +37,7 @@ import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressIndicatorProvider
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
+import com.intellij.openapi.projectRoots.JavaSdkVersion
 import com.intellij.openapi.projectRoots.JavaSdkVersionUtil
 import com.intellij.openapi.roots.DependencyScope
 import com.intellij.openapi.roots.LanguageLevelProjectExtension
@@ -67,7 +68,7 @@ class BazilProjectSettings : ExternalProjectSettings() {
 
 // Allows for running in the same process
 val a = run {
-  Registry.addKey("BAZIL.system.in.process", "", true, false)
+  Registry.get("BAZIL.system.in.process").setValue(true)
 }
 
 interface BazilSettingsListener : ExternalSystemSettingsListener<BazilProjectSettings>
@@ -82,16 +83,16 @@ class BazilSettings(project: Project) :
 
   companion object {
     fun getInstance(project: Project): BazilSettings =
-      ServiceManager.getService<BazilSettings>(project, BazilSettings::class.java)
+      ServiceManager.getService(project, BazilSettings::class.java)
   }
 
-  override fun getState(): BazilSettings.State {
+  override fun getState(): State {
     val state = State()
     fillState(state)
     return state
   }
 
-  override fun loadState(state: BazilSettings.State) {
+  override fun loadState(state: State) {
     super.loadState(state)
   }
 
@@ -139,9 +140,9 @@ class BazilProjectSettingsControl(settings: BazilProjectSettings) :
   override fun isExtraSettingModified() = false
 }
 
-class BazilProjectImportBuilder(dataManager: ProjectDataManager) :
+class BazilProjectImportBuilder :
   AbstractExternalProjectImportBuilder<ImportFromBazilControl>(
-    dataManager, { ImportFromBazilControl() }, SYSTEM_ID
+    ProjectDataManager.getInstance(), { ImportFromBazilControl() }, SYSTEM_ID
   ) {
   override fun getName() = "Bazil"
 
@@ -191,13 +192,16 @@ class BazilProjectImportBuilder(dataManager: ProjectDataManager) :
   }
 }
 
-class BazilProjectOpenProcessor(importBuilder: BazilProjectImportBuilder) :
-  ProjectOpenProcessorBase<BazilProjectImportBuilder>(importBuilder) {
+class BazilProjectOpenProcessor : ProjectOpenProcessorBase<BazilProjectImportBuilder>() {
   override fun getSupportedExtensions() = arrayOf("BUILD", "WORKSPACE")
+
+  override fun doGetBuilder(): BazilProjectImportBuilder {
+    return ServiceManager.getService(BazilProjectImportBuilder::class.java)
+  }
 }
 
-class BazilProjectImportProvider(builder: BazilProjectImportBuilder) :
-  AbstractExternalProjectImportProvider(builder, SYSTEM_ID)
+class BazilProjectImportProvider :
+  AbstractExternalProjectImportProvider(BazilProjectImportBuilder(), SYSTEM_ID)
 
 class BazilExecutionSettings(val project: Project) : ExternalSystemExecutionSettings()
 
@@ -254,10 +258,18 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
     }
     val ruleManager = RuleManager(project, projectRoot, modules)
 
+    val jdk = JavaSdkVersionUtil.findJdkByVersion(JavaSdkVersion.JDK_11)
+    if (jdk == null) {
+      LOG.error("JDK 11 SDK can't be found")
+    }
+
     // reprocess modules
     progress.text = "updating module dependencies"
     modules.forEach { (moduleId, moduleNode: DataNode<ModuleData>) ->
       LOG.info("processing module $moduleId")
+      if (jdk != null) {
+        moduleNode.createChild(ModuleSdkData.KEY, ModuleSdkData(jdk.name))
+      }
       val rules = ruleManager.getRulesByPrefix(moduleId)
       if (rules != null) {
         for ((name, rule) in rules) {

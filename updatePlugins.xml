@@ -2,7 +2,7 @@
 <plugins>
     <plugin id="me.serce.bazillon"
             url="https://github.com/SerCeMan/bazillion/releases/download/0.0.3/Intellij-Bazillion-0.0.3.zip"
-            version="0.0.3">
-        <idea-version since-build="181.3"/>
+            version="0.0.4">
+        <idea-version since-build="201.5985"/>
     </plugin>
 </plugins>

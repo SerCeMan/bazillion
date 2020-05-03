@@ -1,5 +1,6 @@
 package me.serce.bazillion
 
+import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
@@ -38,6 +39,7 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
     val repository: String,
     val source: Sources?,
     val dependenciesStr: List<String> = arrayListOf(),
+    @JsonIgnore // not needed for source manager
     val allDependencies: MutableList<LibraryData> = arrayListOf()
   )
 
@@ -53,7 +55,11 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
   override fun loadState(state: State) {
     if (state.json.isNotEmpty()) {
       librariesMeta.clear()
-      librariesMeta.putAll(mapper.readValue(state.json))
+      try {
+        librariesMeta.putAll(mapper.readValue(state.json))
+      } catch (e: Exception) {
+        LOG.error("error loading state", e);
+      }
     }
   }
 
@@ -103,12 +109,18 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
             LOG.warn("Can't attach sources for '$artifactCoords'")
             continue
           }
-          librariesMeta[artifactCoords] = lib.copy(
-            source = Sources(
-              dep["url"] as String,
-              lib.repository
-            )
+          val sources = Sources(
+            dep["url"] as String,
+            lib.repository
           )
+          librariesMeta[artifactCoords] = lib.copy(
+            source = sources
+          )
+          val localSourceJar = sources.localSourceJar()
+          if (localSourceJar.exists()) {
+            val libraryData = actualLibraries[lib.name]
+            libraryData?.addPath(LibraryPathType.SOURCE, localSourceJar.absolutePath)
+          }
           continue
         }
 
@@ -140,13 +152,6 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
           setArtifactId(artifactId)
           setVersion(version)
           addPath(LibraryPathType.BINARY, jarFile.absolutePath)
-        }
-        val sources = lib.source
-        if (sources != null) {
-          val localSourceJar = sources.localSourceJar()
-          if (localSourceJar.exists()) {
-            libraryData.addPath(LibraryPathType.SOURCE, localSourceJar.absolutePath)
-          }
         }
         lib.allDependencies.add(libraryData)
         actualLibraries[lib.name] = libraryData

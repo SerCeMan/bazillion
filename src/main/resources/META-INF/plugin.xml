@@ -1,4 +1,4 @@
-<idea-plugin version="2">
+<idea-plugin>
     <id>me.serce.bazillon</id>
     <name>Bazillion</name>
     <vendor email="sergeicelov@gmail.com">Intellij Bazillion</vendor>
@@ -26,9 +26,14 @@
     ]]>
     </change-notes>
 
-    <idea-version since-build="183.0"/>
+    <idea-version since-build="201.5985"/>
 
+    <depends>com.intellij.java</depends>
     <depends>com.intellij.modules.lang</depends>
+    <depends>com.intellij.modules.java</depends>
+    <depends>com.intellij.modules.java-capable</depends>
+    <depends>com.intellij.modules.idea</depends>
+    <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.externalSystem</depends>
 
     <extensions defaultExtensionNs="com.intellij">
