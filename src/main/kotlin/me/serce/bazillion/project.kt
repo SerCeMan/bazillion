@@ -44,9 +44,12 @@ import com.intellij.openapi.roots.LanguageLevelProjectExtension
 import com.intellij.openapi.startup.StartupActivity
 import com.intellij.openapi.util.registry.Registry
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.projectImport.ProjectImportBuilder
 import com.intellij.projectImport.ProjectOpenProcessorBase
 import com.intellij.util.Function
 import com.intellij.util.messages.Topic
+import me.serce.bazillion.BazilIcons.Bazil
 import java.io.File
 import java.util.*
 
@@ -132,7 +135,7 @@ class BazilSystemSettingsControl : ExternalSystemSettingsControl<BazilSettings> 
 }
 
 class BazilProjectSettingsControl(settings: BazilProjectSettings) :
-  AbstractExternalProjectSettingsControl<BazilProjectSettings>(null, settings, null) {
+  AbstractExternalProjectSettingsControl<BazilProjectSettings>(null, settings) {
   override fun resetExtraSettings(isDefaultModuleCreation: Boolean) {}
   override fun applyExtraSettings(settings: BazilProjectSettings) {}
   override fun validate(settings: BazilProjectSettings) = true
@@ -178,7 +181,7 @@ class BazilProjectImportBuilder :
     }
   }
 
-  override fun getIcon() = BazilIcons.Bazil
+  override fun getIcon() = Bazil
 
   override fun doPrepare(context: WizardContext) {
     var pathToUse = fileToImport
@@ -195,13 +198,20 @@ class BazilProjectImportBuilder :
 class BazilProjectOpenProcessor : ProjectOpenProcessorBase<BazilProjectImportBuilder>() {
   override fun getSupportedExtensions() = arrayOf("BUILD", "WORKSPACE")
 
-  override fun doGetBuilder(): BazilProjectImportBuilder {
-    return ServiceManager.getService(BazilProjectImportBuilder::class.java)
+  override fun doGetBuilder() =
+    ProjectImportBuilder.EXTENSIONS_POINT_NAME.findExtensionOrFail(BazilProjectImportBuilder::class.java)
+
+  override fun doQuickImport(file: VirtualFile, wizardContext: WizardContext): Boolean {
+    val project = wizardContext.project
+    builder.getControl(project).setLinkedProjectPath(project?.projectFilePath ?: file.path)
+    return true
   }
 }
 
-class BazilProjectImportProvider :
-  AbstractExternalProjectImportProvider(BazilProjectImportBuilder(), SYSTEM_ID)
+class BazilProjectImportProvider : AbstractExternalProjectImportProvider(null, SYSTEM_ID) {
+  override fun doGetBuilder() =
+    ProjectImportBuilder.EXTENSIONS_POINT_NAME.findExtensionOrFail(BazilProjectImportBuilder::class.java)
+}
 
 class BazilExecutionSettings(val project: Project) : ExternalSystemExecutionSettings()
 
@@ -463,6 +473,14 @@ class RuleManager(
           .filterIsInstance<ExpressionStatement>().map { it.expression }
           .filterIsInstance<FuncallExpression>()
 
+        val projectName = "//${buildFile.parentFile.relativeTo(projectRoot).path}"
+        val loadStatements = parsedBuildFile.statements
+          .filterIsInstance<LoadStatement>()
+        if (loadStatements.any { it.import?.value?.startsWith("@io_bazel_rules_webtesting") == true }) {
+          // in the case of webtests simply ignore the whole module
+          // TODO: handle these tests
+        }
+
         // libname -> rule
         val allRules: MutableMap<String, RawRule> = hashMapOf()
         val javaRules = funCallExpressions
@@ -501,7 +519,7 @@ class RuleManager(
             println("Failed to process $funCall")
           }
         }
-        "//${buildFile.parentFile.relativeTo(projectRoot).path}" to allRules
+        projectName to allRules
       }
       .toMap()
 
