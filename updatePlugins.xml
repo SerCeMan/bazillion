@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
     <plugin id="me.serce.bazillon"
-            url="https://github.com/SerCeMan/bazillion/releases/download/0.0.4/Intellij-Bazillion-0.0.4.zip"
-            version="0.0.4.1">
+            url="https://github.com/SerCeMan/bazillion/releases/download/0.0.5/Intellij-Bazillion-0.0.5.zip"
+            version="0.0.5">
         <idea-version since-build="201.5985"/>
     </plugin>
 </plugins>
