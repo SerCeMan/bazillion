@@ -52,6 +52,7 @@ import com.intellij.util.messages.Topic
 import me.serce.bazillion.BazilIcons.Bazil
 import java.io.File
 import java.util.*
+import java.util.regex.Pattern
 
 val SYSTEM_ID = ProjectSystemId("BAZIL")
 val TOPIC = Topic.create<BazilSettingsListener>(
@@ -118,7 +119,7 @@ class BazilSettings(project: Project) :
 
 class ImportFromBazilControl :
   AbstractImportFromExternalSystemControl<BazilProjectSettings, BazilSettingsListener, BazilSettings>
-    (SYSTEM_ID, BazilSettings(ProjectManager.getInstance().defaultProject), BazilProjectSettings(), true) {
+  (SYSTEM_ID, BazilSettings(ProjectManager.getInstance().defaultProject), BazilProjectSettings(), true) {
   override fun createProjectSettingsControl(settings: BazilProjectSettings) = BazilProjectSettingsControl(settings)
   override fun onLinkedProjectPathChange(path: String) {}
   override fun createSystemSettingsControl(settings: BazilSettings) = BazilSystemSettingsControl()
@@ -235,9 +236,9 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
     val root = projectDataNode
       .createChild(
         ProjectKeys.MODULE, ModuleData(
-          projectName, SYSTEM_ID, ModuleTypeId.JAVA_MODULE,
-          projectName, projectPath, projectPath
-        )
+        projectName, SYSTEM_ID, ModuleTypeId.JAVA_MODULE,
+        projectName, projectPath, projectPath
+      )
       )
       .createChild(ProjectKeys.CONTENT_ROOT, ContentRootData(SYSTEM_ID, projectPath))
 
@@ -367,9 +368,9 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
       val id = "//${File(projectPath).relativeTo(projectRoot)}"
       val module = node.createChild(
         ProjectKeys.MODULE, ModuleData(
-          id, SYSTEM_ID, JavaModuleType.getModuleType().id,
-          projectName, projectPath, projectPath
-        )
+        id, SYSTEM_ID, JavaModuleType.getModuleType().id,
+        projectName, projectPath, projectPath
+      )
       )
 
       modules[id] = module
@@ -397,7 +398,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
 
     for (child in files) {
       if (child.isDirectory) {
-        if (!(isSrcContainingModule && (child.name == "src" || child.name == "test") )) {
+        if (!(isSrcContainingModule && (child.name == "src" || child.name == "test"))) {
           collectProjects(modules, projectRoot, child, node)
         }
       }
@@ -441,6 +442,9 @@ data class Rule(
 fun isNonProjectDirectory(it: File) = it.isDirectory && (
   it.name.startsWith(".") ||
     it.name.startsWith("bazel-") ||
+    it.name == "sdks" || // just ignore them all
+    it.name == "selenium-tests" || // just ignore them all
+    it.name == "production" || // just ignore them all
     it.name == "node_modules" ||
     it.name == "out" ||
     it.name == "target")
@@ -495,19 +499,39 @@ class RuleManager(
           .map { (kind, funCall) -> kind to funCall.arguments.filterIsInstance<Argument.Keyword>() }
         for ((kind, funCall) in javaRules) {
           var name: String? = null
-          val fields = mutableMapOf<String, List<String>>()
+          val fields = mutableMapOf<String, MutableList<String>>()
 
           for (argument in funCall) {
             val argName = argument.name
             if (argName == "name") {
               name = (argument.value as? StringLiteral)?.value
             } else if (argName != null && argName in listOf("exports", "deps", "runtimeDeps")) {
-              val libList = argument.value
-              if (libList is ListLiteral) {
-                fields[argName] = libList.elements
-                  .filterIsInstance<StringLiteral>()
-                  .map { it.value }
+              fun collectLibs(libList: Expression?, fields: MutableMap<String, MutableList<String>>, argName: String) {
+                when (libList) {
+                  is ListLiteral -> {
+                    fields.computeIfAbsent(argName, { arrayListOf<String>() })
+                      .addAll(libList.elements
+                        .filterIsInstance<StringLiteral>()
+                        .map { it.value }
+                      )
+                  }
+                  is BinaryOperatorExpression -> {
+                    collectLibs(libList.lhs, fields, argName)
+                    collectLibs(libList.rhs, fields, argName)
+                  }
+                  is Identifier -> {
+                    val ref = parsedBuildFile.statements
+                      .filterIsInstance<AssignmentStatement>()
+                      .firstOrNull {
+                          (it.lValue.expression as? Identifier)?.name == libList.name
+                      }
+                    collectLibs(ref?.expression, fields, argName)
+                  }
+                }
               }
+
+              val libList = argument.value
+              collectLibs(libList, fields, argName)
             }
           }
 
@@ -567,22 +591,24 @@ class RuleManager(
       ) {
         for (dep in rawList) {
           when {
-            dep.startsWith("@maven//:") -> {
-              val depName = dep.substring("@maven//:".length)
-              libManager.getActualLib(depName)?.let { library ->
-                val artifact = library.externalName
-                val lib = libManager.getLibMeta(artifact)
-                if (lib != null) {
-                  deps.addAll(lib.allDependencies)
-                } else {
+            dep.startsWith("@") -> {
+              val depPrefixEnd = dep.indexOf("//:")
+              if (depPrefixEnd <= 0) {
+                LOG.warn("Can't find dependency '$dep' in the list of libraries")
+              } else {
+                val depName = dep.substring(depPrefixEnd + "//:".length)
+                libManager.getActualLib(depName)?.let { library ->
+                  val artifact = library.externalName
+                  val lib = libManager.getLibMeta(artifact)
+                  if (lib != null) {
+                    deps.addAll(lib.allDependencies)
+                  } else {
+                    LOG.warn("Can't find dependency '$dep' in the list of libraries")
+                  }
+                } ?: run {
                   LOG.warn("Can't find dependency '$dep' in the list of libraries")
                 }
-              } ?: run {
-                LOG.warn("Can't find dependency '$dep' in the list of libraries")
               }
-            }
-            dep.startsWith("@") -> {
-              LOG.warn("Can't handle dependency '$dep' for the list of libraries")
             }
             dep.startsWith(":") -> {
               val depRule = findRule(path, dep.substring(1))
