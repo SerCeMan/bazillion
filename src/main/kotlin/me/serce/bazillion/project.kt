@@ -362,7 +362,8 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
         break
       }
     }
-    if (bazelRoot && srcFolder) {
+    val isSrcContainingModule = bazelRoot && srcFolder
+    if (isSrcContainingModule) {
       val id = "//${File(projectPath).relativeTo(projectRoot)}"
       val module = node.createChild(
         ProjectKeys.MODULE, ModuleData(
@@ -392,9 +393,11 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
         storePath(ExternalSystemSourceType.EXCLUDED, "$projectPath/target")
       }
 
-    } else {
-      for (child in files) {
-        if (child.isDirectory) {
+    }
+
+    for (child in files) {
+      if (child.isDirectory) {
+        if (!(isSrcContainingModule && (child.name == "src" || child.name == "test") )) {
           collectProjects(modules, projectRoot, child, node)
         }
       }
