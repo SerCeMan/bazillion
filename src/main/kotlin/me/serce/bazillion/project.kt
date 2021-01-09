@@ -52,7 +52,6 @@ import com.intellij.util.messages.Topic
 import me.serce.bazillion.BazilIcons.Bazil
 import java.io.File
 import java.util.*
-import java.util.regex.Pattern
 
 val SYSTEM_ID = ProjectSystemId("BAZIL")
 val TOPIC = Topic.create<BazilSettingsListener>(
@@ -119,7 +118,7 @@ class BazilSettings(project: Project) :
 
 class ImportFromBazilControl :
   AbstractImportFromExternalSystemControl<BazilProjectSettings, BazilSettingsListener, BazilSettings>
-  (SYSTEM_ID, BazilSettings(ProjectManager.getInstance().defaultProject), BazilProjectSettings(), true) {
+    (SYSTEM_ID, BazilSettings(ProjectManager.getInstance().defaultProject), BazilProjectSettings(), true) {
   override fun createProjectSettingsControl(settings: BazilProjectSettings) = BazilProjectSettingsControl(settings)
   override fun onLinkedProjectPathChange(path: String) {}
   override fun createSystemSettingsControl(settings: BazilSettings) = BazilSystemSettingsControl()
@@ -165,22 +164,7 @@ class BazilProjectImportBuilder :
     else -> file.parentFile
   }
 
-  override fun applyExtraSettings(context: WizardContext) {
-    val node = externalProjectNode
-    if (node == null) {
-      return
-    }
-    val javaProjectNode = ExternalSystemApiUtil.find(node, JavaProjectData.KEY)
-    if (javaProjectNode != null) {
-      val data = javaProjectNode.data
-      context.compilerOutputDirectory = data.compileOutputPath
-      val version = data.jdkVersion
-      val jdk = JavaSdkVersionUtil.findJdkByVersion(version)
-      if (jdk != null) {
-        context.projectJdk = jdk
-      }
-    }
-  }
+  override fun applyExtraSettings(context: WizardContext) {}
 
   override fun getIcon() = Bazil
 
@@ -197,8 +181,6 @@ class BazilProjectImportBuilder :
 }
 
 class BazilProjectOpenProcessor : ProjectOpenProcessorBase<BazilProjectImportBuilder>() {
-  override fun getSupportedExtensions() = arrayOf("BUILD", "WORKSPACE")
-
   override fun doGetBuilder() =
     ProjectImportBuilder.EXTENSIONS_POINT_NAME.findExtensionOrFail(BazilProjectImportBuilder::class.java)
 
@@ -207,6 +189,8 @@ class BazilProjectOpenProcessor : ProjectOpenProcessorBase<BazilProjectImportBui
     builder.getControl(project).setLinkedProjectPath(project?.projectFilePath ?: file.path)
     return true
   }
+
+  override val supportedExtensions = arrayOf("BUILD", "WORKSPACE")
 }
 
 class BazilProjectImportProvider : AbstractExternalProjectImportProvider(null, SYSTEM_ID) {
@@ -236,9 +220,9 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
     val root = projectDataNode
       .createChild(
         ProjectKeys.MODULE, ModuleData(
-        projectName, SYSTEM_ID, ModuleTypeId.JAVA_MODULE,
-        projectName, projectPath, projectPath
-      )
+          projectName, SYSTEM_ID, ModuleTypeId.JAVA_MODULE,
+          projectName, projectPath, projectPath
+        )
       )
       .createChild(ProjectKeys.CONTENT_ROOT, ContentRootData(SYSTEM_ID, projectPath))
 
@@ -368,9 +352,9 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
       val id = "//${File(projectPath).relativeTo(projectRoot)}"
       val module = node.createChild(
         ProjectKeys.MODULE, ModuleData(
-        id, SYSTEM_ID, JavaModuleType.getModuleType().id,
-        projectName, projectPath, projectPath
-      )
+          id, SYSTEM_ID, JavaModuleType.getModuleType().id,
+          projectName, projectPath, projectPath
+        )
       )
 
       modules[id] = module
@@ -462,8 +446,10 @@ class RuleManager(
 
     data class RawRule(
       val kind: RuleKind,
+      val buildFileFolderPath: String,
       val exports: List<String>,
       val deps: List<String>,
+      val jars: List<String>,
       val runtimeDeps: List<String>
     )
 
@@ -500,11 +486,22 @@ class RuleManager(
         for ((kind, funCall) in javaRules) {
           var name: String? = null
           val fields = mutableMapOf<String, MutableList<String>>()
+          val jars = mutableListOf<String>()
 
           for (argument in funCall) {
             val argName = argument.name
             if (argName == "name") {
               name = (argument.value as? StringLiteral)?.value
+            } else if (argName == "jars") {
+              val libList = argument.value
+              when (libList) {
+                is ListLiteral -> {
+                  jars.addAll(libList.elements
+                    .filterIsInstance<StringLiteral>()
+                    .map { it.value }
+                  )
+                }
+              }
             } else if (argName != null && argName in listOf("exports", "deps", "runtimeDeps")) {
               fun collectLibs(libList: Expression?, fields: MutableMap<String, MutableList<String>>, argName: String) {
                 when (libList) {
@@ -523,7 +520,7 @@ class RuleManager(
                     val ref = parsedBuildFile.statements
                       .filterIsInstance<AssignmentStatement>()
                       .firstOrNull {
-                          (it.lValue.expression as? Identifier)?.name == libList.name
+                        (it.lValue.expression as? Identifier)?.name == libList.name
                       }
                     collectLibs(ref?.expression, fields, argName)
                   }
@@ -538,9 +535,11 @@ class RuleManager(
           if (name != null) {
             allRules[name] = RawRule(
               kind,
-              fields["exports"] ?: emptyList(),
-              fields["deps"] ?: emptyList(),
-              fields["runtimeDeps"] ?: emptyList()
+              buildFile.parentFile.absolutePath,
+              exports = fields["exports"] ?: emptyList(),
+              deps = fields["deps"] ?: emptyList(),
+              jars = jars,
+              runtimeDeps = fields["runtimeDeps"] ?: emptyList()
             )
           } else {
             println("Failed to process $funCall")
@@ -562,7 +561,7 @@ class RuleManager(
       val runtimeDeps = hashSetOf<AbstractNamedData>()
       val rawRule: RawRule = ruleMapping[path]?.get(name) ?: run {
         LOG.error("Unable to find the rule under '$path' with name '$name'")
-        RawRule(RuleKind.DUMMY, emptyList(), emptyList(), emptyList())
+        RawRule(RuleKind.DUMMY, "", emptyList(), emptyList(), emptyList(), emptyList())
       }
 
       // if I'm the module then I add myself everywhere
@@ -632,8 +631,9 @@ class RuleManager(
       fillDeps(deps, rawRule.deps + rawRule.exports, { it.deps + it.exports })
       fillDeps(runtimeDeps, rawRule.runtimeDeps, { it.runtimeDeps + it.exports })
       fillDeps(exports, rawRule.exports, { it.exports })
+      val jars = libManager.getJarLibs(rawRule.buildFileFolderPath, rawRule.jars)
 
-      val rule = Rule(rawRule.kind, exports, deps, runtimeDeps)
+      val rule = Rule(rawRule.kind, exports, deps + jars, runtimeDeps)
       LOG.info("Processed rule $path:$name")
       ruleCache
         .computeIfAbsent(path, { hashMapOf() })

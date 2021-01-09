@@ -41,7 +41,7 @@ intellij {
     pluginName 'Intellij-Bazillion'
 
     plugins 'java'
-    version '2020.1'
+    version '2020.3.1'
     downloadSources true
     updateSinceUntilBuild = false
 

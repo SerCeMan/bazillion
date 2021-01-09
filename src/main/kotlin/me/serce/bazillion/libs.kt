@@ -49,6 +49,7 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
 
   private val actualLibraries: MutableMap<String, LibraryData> = mutableMapOf()
   private val librariesMeta: MutableMap<String, LibMetadata> = mutableMapOf()
+  private val jarLibraries: MutableMap<String, LibraryData> = mutableMapOf()
 
   override fun getState() = State(mapper.writeValueAsString(librariesMeta))
 
@@ -70,6 +71,7 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
   fun refresh(progress: ProgressIndicator) {
     actualLibraries.clear()
     librariesMeta.clear()
+    jarLibraries.clear()
 
     val projectRoot = File(project.basePath)
     val toDownload = arrayListOf<Pair<LibMetadata, File>>()
@@ -169,6 +171,16 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
         }
         lib.allDependencies.add(libraryData)
       }
+    }
+  }
+
+  fun getJarLibs(buildFileFolderPath: String, jars: List<String>): List<LibraryData> {
+    return jars.map { libPath ->
+      jarLibraries.getOrPut(libPath, {
+        LibraryData(SYSTEM_ID, libPath).apply {
+          addPath(LibraryPathType.BINARY, "${buildFileFolderPath}/${libPath}")
+        }
+      })
     }
   }
 
