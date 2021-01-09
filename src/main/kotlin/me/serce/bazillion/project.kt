@@ -291,7 +291,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
                   }
                 }
               }
-              rule.kind in listOf(RuleKind.JAVA_LIBRARY, RuleKind.JAVA_BINARY, RuleKind.DATANUCLEUS_JAVA_LIBRARY) -> {
+              rule.kind in listOf(RuleKind.JAVA_LIBRARY, RuleKind.JAVA_IMPORT, RuleKind.JAVA_BINARY, RuleKind.DATANUCLEUS_JAVA_LIBRARY) -> {
                 for (dep in sequenceOf(rule.deps, rule.exports, rule.runtimeDeps).flatten()) {
                   when (dep) {
                     is LibraryData -> moduleNode.createChild(
@@ -406,6 +406,7 @@ class BazilLocalSettings(project: Project) :
 enum class RuleKind(vararg val names: String) {
   JAVA_LIBRARY("java_library"),
   JAVA_BINARY("java_binary"),
+  JAVA_IMPORT("java_import"),
   DATANUCLEUS_JAVA_LIBRARY("datanucleus_java_library"),
   JUNIT_TESTS("java_test", "junit_tests"),
   GEN_RULE("genrule"),
