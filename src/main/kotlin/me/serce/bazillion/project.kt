@@ -267,51 +267,53 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
       }
       val rules = ruleManager.getRulesByPrefix(moduleId)
       if (rules != null) {
-        for ((name, rule) in rules) {
-          when {
-            rule.kind == RuleKind.JUNIT_TESTS || name == "test-lib" -> {
-              for (dep in sequenceOf(rule.deps, rule.exports, rule.runtimeDeps).flatten()) {
-                when (dep) {
-                  is LibraryData -> moduleNode.createChild(
-                    ProjectKeys.LIBRARY_DEPENDENCY,
-                    LibraryDependencyData(moduleNode.data, dep, LibraryLevel.PROJECT).apply {
-                      scope = DependencyScope.TEST
+        for ((name, nestedRules) in rules) {
+          for (rule in nestedRules) {
+            when {
+              rule.kind == RuleKind.JUNIT_TESTS || name == "test-lib" -> {
+                for (dep in sequenceOf(rule.deps, rule.exports, rule.runtimeDeps).flatten()) {
+                  when (dep) {
+                    is LibraryData -> moduleNode.createChild(
+                      ProjectKeys.LIBRARY_DEPENDENCY,
+                      LibraryDependencyData(moduleNode.data, dep, LibraryLevel.PROJECT).apply {
+                        scope = DependencyScope.TEST
+                      }
+                    )
+                    is ModuleData -> moduleNode.createChild(
+                      ProjectKeys.MODULE_DEPENDENCY,
+                      ModuleDependencyData(moduleNode.data, dep).apply {
+                        scope = DependencyScope.TEST
+                      }
+                    )
+                    else -> {
+                      LOG.error("Unsupported dependency $dep for unit tests")
                     }
-                  )
-                  is ModuleData -> moduleNode.createChild(
-                    ProjectKeys.MODULE_DEPENDENCY,
-                    ModuleDependencyData(moduleNode.data, dep).apply {
-                      scope = DependencyScope.TEST
-                    }
-                  )
-                  else -> {
-                    LOG.error("Unsupported dependency $dep for unit tests")
                   }
                 }
               }
-            }
-            rule.kind in listOf(RuleKind.JAVA_LIBRARY, RuleKind.JAVA_BINARY, RuleKind.DATANUCLEUS_JAVA_LIBRARY) -> {
-              for (dep in sequenceOf(rule.deps, rule.exports, rule.runtimeDeps).flatten()) {
-                when (dep) {
-                  is LibraryData -> moduleNode.createChild(
-                    ProjectKeys.LIBRARY_DEPENDENCY,
-                    LibraryDependencyData(moduleNode.data, dep, LibraryLevel.PROJECT)
-                  )
-                  is ModuleData -> moduleNode.createChild(
-                    ProjectKeys.MODULE_DEPENDENCY,
-                    ModuleDependencyData(moduleNode.data, dep)
-                  )
-                  else -> {
-                    LOG.error("Unsupported dependency $dep for java module")
+              rule.kind in listOf(RuleKind.JAVA_LIBRARY, RuleKind.JAVA_BINARY, RuleKind.DATANUCLEUS_JAVA_LIBRARY) -> {
+                for (dep in sequenceOf(rule.deps, rule.exports, rule.runtimeDeps).flatten()) {
+                  when (dep) {
+                    is LibraryData -> moduleNode.createChild(
+                      ProjectKeys.LIBRARY_DEPENDENCY,
+                      LibraryDependencyData(moduleNode.data, dep, LibraryLevel.PROJECT)
+                    )
+                    is ModuleData -> moduleNode.createChild(
+                      ProjectKeys.MODULE_DEPENDENCY,
+                      ModuleDependencyData(moduleNode.data, dep)
+                    )
+                    else -> {
+                      LOG.error("Unsupported dependency $dep for java module")
+                    }
                   }
                 }
               }
-            }
-            rule.kind in listOf(RuleKind.GEN_RULE, RuleKind.DUMMY, RuleKind.COMPILE_SOY) -> {
-              // do nothing
-            }
-            else -> {
-              LOG.error("Unknown rule ${rule.kind}")
+              rule.kind in listOf(RuleKind.GEN_RULE, RuleKind.DUMMY, RuleKind.COMPILE_SOY) -> {
+                // do nothing
+              }
+              else -> {
+                LOG.error("Unknown rule ${rule.kind}")
+              }
             }
           }
         }
@@ -654,10 +656,12 @@ class RuleManager(
   }
 
   fun getRules(packagePath: String): Map<String, Rule>? = rules[packagePath]
-  fun getRulesByPrefix(packagePrefix: String): Map<String, Rule>? = rules.entries
+  fun getRulesByPrefix(packagePrefix: String): Map<String, List<Rule>>? = rules.entries
     .filter { it.key.startsWith(packagePrefix) }
     .flatMap { it.value.entries.map { entry -> entry.key to entry.value } }
-    .toMap()
+    .fold(mutableMapOf(), { acc, pair ->
+      acc.apply { merge(pair.first, listOf(pair.second), { a: List<Rule>, b: List<Rule> -> a + b }) }
+    })
 }
 
 class BazilTaskManager : ExternalSystemTaskManager<BazilExecutionSettings> {
