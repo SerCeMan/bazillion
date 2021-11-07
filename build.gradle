@@ -13,10 +13,7 @@ plugins {
 }
 
 repositories {
-    jcenter()
-    maven {
-        url  "https://dl.bintray.com/serce/bazillion"
-    }
+    mavenCentral()
 }
 
 apply plugin: 'kotlin'
@@ -41,7 +38,7 @@ intellij {
     pluginName 'Intellij-Bazillion'
 
     plugins 'java'
-    version '2020.3.1'
+    version '2020.3.3'
     downloadSources true
     updateSinceUntilBuild = false
 
@@ -58,5 +55,6 @@ dependencies {
     compile "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
     compile "org.jetbrains.kotlin:kotlin-reflect:$kotlin_version"
     compile "com.fasterxml.jackson.module:jackson-module-kotlin:2.9.+"
-    compile "me.serce:bazel_syntax:0.0.1"
+
+    implementation(files('lib/bazel_syntax-0.0.1.jar'))
 }
