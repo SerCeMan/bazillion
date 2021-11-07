@@ -404,7 +404,7 @@ class BazilLocalSettings(project: Project) :
 
 
 enum class RuleKind(vararg val names: String) {
-  JAVA_LIBRARY("java_library"),
+  JAVA_LIBRARY("java_library", "localized_java_library"),
   JAVA_BINARY("java_binary"),
   JAVA_IMPORT("java_import"),
   DATANUCLEUS_JAVA_LIBRARY("datanucleus_java_library"),
