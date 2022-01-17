@@ -190,7 +190,12 @@ class BazilProjectOpenProcessor : ProjectOpenProcessorBase<BazilProjectImportBui
     return true
   }
 
-  override val supportedExtensions = arrayOf("BUILD", "WORKSPACE")
+  override val supportedExtensions = arrayOf(
+    "BUILD",
+    "BUILD.bazel",
+    "WORKSPACE",
+    "WORKSPACE.bazel"
+  )
 }
 
 class BazilProjectImportProvider : AbstractExternalProjectImportProvider(null, SYSTEM_ID) {
@@ -339,7 +344,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
     var bazelRoot = false
     var srcFolder = false
     for (child in files) {
-      if (child.name == "BUILD" && child.length() != 0L) {
+      if (child.name in listOf("BUILD", "BUILD.bazel") && child.length() != 0L) {
         bazelRoot = true
       }
       if (child.name == "src" && child.isDirectory) {
@@ -459,7 +464,7 @@ class RuleManager(
     LOG.info("searching for BUILDs")
     val ruleMapping = projectRoot.walk()
       .onEnter { !isNonProjectDirectory(it) }
-      .filter { it.name == "BUILD" }
+      .filter { it.name in listOf("BUILD", "BUILD.bazel") }
       .map { buildFile ->
         val parsedBuildFile: Parser.ParseResult =
           Parser.parseFile(
