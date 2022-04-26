@@ -45,6 +45,9 @@ intellij {
     sandboxDir = project.rootDir.canonicalPath + "/.sandbox"
 }
 
+// it fails with AWT error on 2022.1
+buildSearchableOptions.enabled = false
+
 runIde {
     maxHeapSize = "4G"
 }
