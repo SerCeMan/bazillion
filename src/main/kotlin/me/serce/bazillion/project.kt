@@ -86,7 +86,7 @@ class BazilSettings(project: Project) :
 
   companion object {
     fun getInstance(project: Project): BazilSettings =
-      ServiceManager.getService(project, BazilSettings::class.java)
+      project.getService(BazilSettings::class.java)
   }
 
   override fun getState(): State {
@@ -696,7 +696,7 @@ class BazilManager : StartupActivity,
   override fun getSystemId() = SYSTEM_ID
   override fun getTaskManagerClass() = BazilTaskManager::class.java
   override fun getLocalSettingsProvider() = Function<Project, BazilLocalSettings> { project ->
-    ServiceManager.getService(project, BazilLocalSettings::class.java)
+    project.getService(BazilLocalSettings::class.java)
   }
 
 }

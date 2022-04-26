@@ -22,7 +22,7 @@ import java.io.File
 class LibManager(private val project: Project) : PersistentStateComponent<LibManager.State> {
   companion object {
     fun getInstance(project: Project): LibManager =
-      ServiceManager.getService(project, LibManager::class.java)
+      project.getService(LibManager::class.java)
   }
 
   data class State(var json: String = "")
