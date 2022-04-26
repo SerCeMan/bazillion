@@ -34,7 +34,7 @@ group 'me.serce'
 intellij {
     pluginName = 'Intellij-Bazillion'
 
-    version = '2020.3.4'
+    version = '2021.2.4'
     downloadSources = true
     updateSinceUntilBuild = false
     // TODO(sergey): remove

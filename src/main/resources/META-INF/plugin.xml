@@ -50,8 +50,7 @@
         <attachSourcesProvider implementation="me.serce.bazillion.BazilAttachSourceProvider"/>
 
         <toolWindow id="Bazil" anchor="right" icon="/icons/bazil.png"
-                    factoryClass="me.serce.bazillion.BazilToolWindowFactory"
-                    conditionClass="me.serce.bazillion.BazilToolWindowFactoryCondition"/>
+                    factoryClass="me.serce.bazillion.BazilToolWindowFactory"/>
     </extensions>
 
     <actions>
