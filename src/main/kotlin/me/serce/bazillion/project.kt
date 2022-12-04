@@ -258,9 +258,9 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
     }
     val ruleManager = RuleManager(project, projectRoot, modules)
 
-    val jdk = JavaSdkVersionUtil.findJdkByVersion(JavaSdkVersion.JDK_11)
+    val jdk = JavaSdkVersionUtil.findJdkByVersion(JavaSdkVersion.JDK_17)
     if (jdk == null) {
-      LOG.error("JDK 11 SDK can't be found")
+      LOG.error("JDK 17 SDK can't be found")
     }
 
     // reprocess modules
@@ -407,14 +407,15 @@ class BazilLocalSettings(project: Project) :
   AbstractExternalSystemLocalSettings<AbstractExternalSystemLocalSettings.State>(SYSTEM_ID, project, State()),
   PersistentStateComponent<AbstractExternalSystemLocalSettings.State>
 
-
 enum class RuleKind(vararg val names: String) {
   JAVA_LIBRARY("java_library", "localized_java_library"),
+//  JAVA_PROTO_LIBRARY("java_proto_library"),
   JAVA_BINARY("java_binary"),
   JAVA_IMPORT("java_import"),
   DATANUCLEUS_JAVA_LIBRARY("datanucleus_java_library"),
   JUNIT_TESTS("java_test", "junit_tests"),
   GEN_RULE("genrule"),
+//  ALIAS("alias"),
   DUMMY("dummy$"),
   COMPILE_SOY("compile_soy");
 
@@ -429,6 +430,12 @@ data class Rule(
   val exports: Set<AbstractNamedData>,
   val deps: Set<AbstractNamedData>,
   val runtimeDeps: Set<AbstractNamedData>
+)
+
+data class Alias(
+  val path: String,
+  val alias: String,
+  val reference: String,
 )
 
 fun isNonProjectDirectory(it: File) = it.isDirectory && (
@@ -458,8 +465,11 @@ class RuleManager(
       val exports: List<String>,
       val deps: List<String>,
       val jars: List<String>,
-      val runtimeDeps: List<String>
+      val runtimeDeps: List<String>,
+//      val aliasedRule: String? = null,
     )
+
+    val aliases = mutableListOf<Alias>()
 
     LOG.info("searching for BUILDs")
     val ruleMapping = projectRoot.walk()
@@ -482,6 +492,23 @@ class RuleManager(
           // TODO: handle these tests
         }
 
+        aliases.addAll(
+          funCallExpressions.filter { funCall -> (funCall.function as? Identifier)?.name == "alias" }
+            .map { funCall -> funCall.arguments.filterIsInstance<Argument.Keyword>() }
+            .mapNotNull { arguments ->
+              var alias: String? = null
+              var reference: String? = null
+              for (arg in arguments) {
+                val value = (arg.value as? StringLiteral)?.value
+                when (arg.name) {
+                  "name" -> alias = value
+                  "actual" -> reference = value
+                }
+              }
+              if (alias != null && reference != null) Alias(projectName, alias, reference) else null
+            }
+        )
+
         // libname -> rule
         val allRules: MutableMap<String, RawRule> = hashMapOf()
         val javaRules = funCallExpressions
@@ -495,6 +522,7 @@ class RuleManager(
           var name: String? = null
           val fields = mutableMapOf<String, MutableList<String>>()
           val jars = mutableListOf<String>()
+//          var aliasedRule: String? = null
 
           for (argument in funCall) {
             val argName = argument.name
@@ -510,6 +538,8 @@ class RuleManager(
                   )
                 }
               }
+//            } else if (argName == "actual") {
+//              aliasedRule = (argument.value as? StringLiteral)?.value
             } else if (argName != null && argName in listOf("exports", "deps", "runtimeDeps")) {
               fun collectLibs(libList: Expression?, fields: MutableMap<String, MutableList<String>>, argName: String) {
                 when (libList) {
@@ -547,7 +577,8 @@ class RuleManager(
               exports = fields["exports"] ?: emptyList(),
               deps = fields["deps"] ?: emptyList(),
               jars = jars,
-              runtimeDeps = fields["runtimeDeps"] ?: emptyList()
+              runtimeDeps = fields["runtimeDeps"] ?: emptyList(),
+//              aliasedRule = aliasedRule,
             )
           } else {
             println("Failed to process $funCall")
@@ -556,6 +587,22 @@ class RuleManager(
         projectName to allRules
       }
       .toMap()
+
+    for ((path, alias, reference) in aliases) {
+      var refPath: String
+      var refName: String
+      if (reference.startsWith("//")) {
+        refPath = reference.substring(0, reference.lastIndexOf(':'))
+        refName = reference.substringAfter(':')
+      } else {
+        refPath = path
+        refName = reference.substringAfter(':')
+      }
+      val resolvedReference = ruleMapping[refPath]?.get(refName)
+      if (resolvedReference != null) {
+        ruleMapping[path]?.set(alias, resolvedReference)
+      }
+    }
 
     val ruleCache = mutableMapOf<String, MutableMap<String, Rule>>()
 
@@ -601,7 +648,9 @@ class RuleManager(
             dep.startsWith("@") -> {
               val depPrefixEnd = dep.indexOf("//:")
               if (depPrefixEnd <= 0) {
-                LOG.warn("Can't find dependency '$dep' in the list of libraries")
+                val bazelLib = libManager.getBazelLib(dep)
+                bazelLib?.let { deps.add(it) }
+//                LOG.warn("Can't find dependency '$dep' in the list of libraries")
               } else {
                 val depName = dep.substring(depPrefixEnd + "//:".length)
                 libManager.getActualLib(depName)?.let { library ->

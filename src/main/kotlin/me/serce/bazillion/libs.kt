@@ -14,6 +14,7 @@ import com.intellij.util.io.HttpRequests
 import me.serce.bazillion.LibManager.LibMetadata
 import me.serce.bazillion.LibManager.Sources
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 @State(
   name = "BazilLibManager",
@@ -68,17 +69,18 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
   fun getLibMeta(path: String) = librariesMeta[path]
   fun getAllLibs(): Collection<LibraryData> = actualLibraries.values
 
+  val projectRoot = File(project.basePath)
+
   fun refresh(progress: ProgressIndicator) {
     actualLibraries.clear()
     librariesMeta.clear()
     jarLibraries.clear()
 
-    val projectRoot = File(project.basePath)
     val toDownload = arrayListOf<Pair<LibMetadata, File>>()
     // Create a maps of libs
     progress.text = "updating third parties"
 
-    collectMavenInstalls(projectRoot, toDownload)
+    collectMavenInstalls(toDownload)
 
     LOG.info("resolving libraries")
     progress.text = "resolving libraries"
@@ -92,7 +94,6 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
   }
 
   private fun collectMavenInstalls(
-    projectRoot: File,
     toDownload: ArrayList<Pair<LibMetadata, File>>
   ) {
     val mavenInstallFiles = projectRoot.walk()
@@ -174,13 +175,47 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
     }
   }
 
+  fun getBazelLib(name: String): LibraryData? {
+//    actualLibraries.contain
+    return actualLibraries.getOrPut(name) {
+      var process = ProcessBuilder("bazel", "build", "@bazel_tools//tools/java/runfiles")
+        .directory(projectRoot)
+        .start()
+      process.waitFor(60, TimeUnit.SECONDS)
+      if (process.exitValue() != 0) {
+        return null
+      }
+
+      process = ProcessBuilder("bazel", "info", "execution_root")
+        .directory(projectRoot)
+        .redirectOutput(ProcessBuilder.Redirect.PIPE)
+        .start()
+      val executionRoot = process.inputStream.bufferedReader().readText().trim()
+      process = ProcessBuilder("bazel", "cquery", name,
+        "--output=starlark", "--starlark:expr", "target.files.to_list()[-1].path")
+        .directory(projectRoot)
+        .start()
+      process.waitFor(60, TimeUnit.SECONDS)
+      LibraryData(SYSTEM_ID, name).apply {
+        addPath(LibraryPathType.BINARY, "${executionRoot}/${process.inputStream.bufferedReader().readLines()[0]}")
+      }
+//      val libPaths = process.inputStream.bufferedReader().readLines()
+//      libPaths.forEach {
+//        val libraryData = LibraryData(SYSTEM_ID, name).apply {
+//          addPath(LibraryPathType.BINARY, "${executionRoot}/${it}")
+//        }
+//        actualLibraries[name] = libraryData
+//      }
+    }
+  }
+
   fun getJarLibs(buildFileFolderPath: String, jars: List<String>): List<LibraryData> {
     return jars.map { libPath ->
-      jarLibraries.getOrPut(libPath, {
+      jarLibraries.getOrPut(libPath) {
         LibraryData(SYSTEM_ID, libPath).apply {
           addPath(LibraryPathType.BINARY, "${buildFileFolderPath}/${libPath}")
         }
-      })
+      }
     }
   }
 
