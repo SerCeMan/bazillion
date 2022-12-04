@@ -415,7 +415,6 @@ enum class RuleKind(vararg val names: String) {
   DATANUCLEUS_JAVA_LIBRARY("datanucleus_java_library"),
   JUNIT_TESTS("java_test", "junit_tests"),
   GEN_RULE("genrule"),
-//  ALIAS("alias"),
   DUMMY("dummy$"),
   COMPILE_SOY("compile_soy");
 
@@ -466,7 +465,6 @@ class RuleManager(
       val deps: List<String>,
       val jars: List<String>,
       val runtimeDeps: List<String>,
-//      val aliasedRule: String? = null,
     )
 
     val aliases = mutableListOf<Alias>()
@@ -522,7 +520,6 @@ class RuleManager(
           var name: String? = null
           val fields = mutableMapOf<String, MutableList<String>>()
           val jars = mutableListOf<String>()
-//          var aliasedRule: String? = null
 
           for (argument in funCall) {
             val argName = argument.name
@@ -538,8 +535,6 @@ class RuleManager(
                   )
                 }
               }
-//            } else if (argName == "actual") {
-//              aliasedRule = (argument.value as? StringLiteral)?.value
             } else if (argName != null && argName in listOf("exports", "deps", "runtimeDeps")) {
               fun collectLibs(libList: Expression?, fields: MutableMap<String, MutableList<String>>, argName: String) {
                 when (libList) {
@@ -578,7 +573,6 @@ class RuleManager(
               deps = fields["deps"] ?: emptyList(),
               jars = jars,
               runtimeDeps = fields["runtimeDeps"] ?: emptyList(),
-//              aliasedRule = aliasedRule,
             )
           } else {
             println("Failed to process $funCall")
