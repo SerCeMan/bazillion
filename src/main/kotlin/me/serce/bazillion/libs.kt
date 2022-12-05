@@ -182,23 +182,17 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
       .start()
     process.inputStream.bufferedReader().readLines()[0]
   }
+  private val bazelLibs = mutableListOf<String>()
   fun getBazelLib(name: String): LibraryData? {
     return actualLibraries.getOrPut(name) {
-      var process = ProcessBuilder("bazel", "build", name)
-        .directory(projectRoot)
-        .start()
-      process.waitFor(60, TimeUnit.SECONDS)
-      if (process.exitValue() != 0) {
-        return null
-      }
-
-      process = ProcessBuilder("bazel", "cquery", name,
+      val process = ProcessBuilder("bazel", "cquery", name,
         "--output=starlark", "--starlark:expr", "'\\n'.join([l.path for l in target.files.to_list()])")
         .directory(projectRoot)
         .start()
-      if (!process.waitFor(60, TimeUnit.SECONDS)) {
+      if (!(process.waitFor(60, TimeUnit.SECONDS) && process.exitValue() == 0)) {
         return null
       }
+      bazelLibs.add(name)
       LibraryData(SYSTEM_ID, name).apply {
         process.inputStream.bufferedReader().readLines().forEach {
           val libType = if (it.endsWith("-src.jar")) LibraryPathType.SOURCE else LibraryPathType.BINARY
@@ -206,6 +200,13 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
         }
       }
     }
+  }
+
+  fun buildBazelLibs() {
+    val command = listOf("bazel", "build") + bazelLibs
+    ProcessBuilder(command)
+      .directory(projectRoot)
+      .start()
   }
 
   fun getJarLibs(buildFileFolderPath: String, jars: List<String>): List<LibraryData> {

@@ -713,6 +713,7 @@ class RuleManager(
           .put(name, rule)
       }
     }
+    libManager.buildBazelLibs()
     rules = result
   }
 
