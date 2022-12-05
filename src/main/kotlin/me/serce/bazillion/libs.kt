@@ -175,10 +175,16 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
     }
   }
 
+  private val executionRoot by lazy {
+    val process = ProcessBuilder("bazel", "info", "execution_root")
+      .directory(projectRoot)
+      .redirectOutput(ProcessBuilder.Redirect.PIPE)
+      .start()
+    process.inputStream.bufferedReader().readLines()[0]
+  }
   fun getBazelLib(name: String): LibraryData? {
-//    actualLibraries.contain
     return actualLibraries.getOrPut(name) {
-      var process = ProcessBuilder("bazel", "build", "@bazel_tools//tools/java/runfiles")
+      var process = ProcessBuilder("bazel", "build", name)
         .directory(projectRoot)
         .start()
       process.waitFor(60, TimeUnit.SECONDS)
@@ -186,26 +192,19 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
         return null
       }
 
-      process = ProcessBuilder("bazel", "info", "execution_root")
-        .directory(projectRoot)
-        .redirectOutput(ProcessBuilder.Redirect.PIPE)
-        .start()
-      val executionRoot = process.inputStream.bufferedReader().readText().trim()
       process = ProcessBuilder("bazel", "cquery", name,
-        "--output=starlark", "--starlark:expr", "target.files.to_list()[-1].path")
+        "--output=starlark", "--starlark:expr", "'\\n'.join([l.path for l in target.files.to_list()])")
         .directory(projectRoot)
         .start()
-      process.waitFor(60, TimeUnit.SECONDS)
-      LibraryData(SYSTEM_ID, name).apply {
-        addPath(LibraryPathType.BINARY, "${executionRoot}/${process.inputStream.bufferedReader().readLines()[0]}")
+      if (!process.waitFor(60, TimeUnit.SECONDS)) {
+        return null
       }
-//      val libPaths = process.inputStream.bufferedReader().readLines()
-//      libPaths.forEach {
-//        val libraryData = LibraryData(SYSTEM_ID, name).apply {
-//          addPath(LibraryPathType.BINARY, "${executionRoot}/${it}")
-//        }
-//        actualLibraries[name] = libraryData
-//      }
+      LibraryData(SYSTEM_ID, name).apply {
+        process.inputStream.bufferedReader().readLines().forEach {
+          val libType = if (it.endsWith("-src.jar")) LibraryPathType.SOURCE else LibraryPathType.BINARY
+          addPath(libType, "$executionRoot/$it")
+        }
+      }
     }
   }
 

@@ -296,7 +296,13 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
                   }
                 }
               }
-              rule.kind in listOf(RuleKind.JAVA_LIBRARY, RuleKind.JAVA_IMPORT, RuleKind.JAVA_BINARY, RuleKind.DATANUCLEUS_JAVA_LIBRARY) -> {
+              rule.kind in listOf(
+                RuleKind.JAVA_LIBRARY,
+                RuleKind.JAVA_IMPORT,
+                RuleKind.JAVA_BINARY,
+                RuleKind.DATANUCLEUS_JAVA_LIBRARY,
+                RuleKind.JAVA_PROTO_LIBRARY
+              ) -> {
                 for (dep in sequenceOf(rule.deps, rule.exports, rule.runtimeDeps).flatten()) {
                   when (dep) {
                     is LibraryData -> moduleNode.createChild(
@@ -409,7 +415,7 @@ class BazilLocalSettings(project: Project) :
 
 enum class RuleKind(vararg val names: String) {
   JAVA_LIBRARY("java_library", "localized_java_library"),
-//  JAVA_PROTO_LIBRARY("java_proto_library"),
+  JAVA_PROTO_LIBRARY("java_proto_library"),
   JAVA_BINARY("java_binary"),
   JAVA_IMPORT("java_import"),
   DATANUCLEUS_JAVA_LIBRARY("datanucleus_java_library"),
@@ -630,6 +636,9 @@ class RuleManager(
         }.forEach { library ->
           libManager.getLibMeta(library.externalName)?.let { deps.addAll(it.allDependencies) }
         }
+      } else if (rawRule.kind == RuleKind.JAVA_PROTO_LIBRARY) {
+        val bazelLib = libManager.getBazelLib("$path:$name")
+        bazelLib?.let { deps.add(it) }
       }
 
       fun fillDeps(
@@ -679,10 +688,13 @@ class RuleManager(
           }
         }
       }
-      fillDeps(deps, rawRule.deps + rawRule.exports, { it.deps + it.exports })
-      fillDeps(runtimeDeps, rawRule.runtimeDeps, { it.runtimeDeps + it.exports })
-      fillDeps(exports, rawRule.exports, { it.exports })
-      val jars = libManager.getJarLibs(rawRule.buildFileFolderPath, rawRule.jars)
+      val jars = mutableListOf<LibraryData>()
+      if (rawRule.kind != RuleKind.JAVA_PROTO_LIBRARY) {
+        fillDeps(deps, rawRule.deps + rawRule.exports, { it.deps + it.exports })
+        fillDeps(runtimeDeps, rawRule.runtimeDeps, { it.runtimeDeps + it.exports })
+        fillDeps(exports, rawRule.exports, { it.exports })
+        jars.addAll(libManager.getJarLibs(rawRule.buildFileFolderPath, rawRule.jars))
+      }
 
       val rule = Rule(rawRule.kind, exports, deps + jars, runtimeDeps)
       LOG.info("Processed rule $path:$name")
