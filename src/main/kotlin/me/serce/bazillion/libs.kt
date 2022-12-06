@@ -176,7 +176,7 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
   }
 
   private val executionRoot by lazy {
-    val process = process(projectRoot, "bazel", "info", "execution_root")
+    val process = process(projectRoot, bazelPath, "info", "execution_root")
     process.inputStream.bufferedReader().readLine()
   }
 
@@ -184,7 +184,7 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
 
   fun getBazelLib(name: String): LibraryData? {
     return actualLibraries.getOrPut(name) {
-      val process = process(projectRoot, "cquery", name,
+      val process = process(projectRoot, bazelPath, "cquery", name,
         "--output=starlark", "--starlark:expr", "'\\n'.join([l.path for l in target.files.to_list()])")
       if (!(process.waitFor(60, TimeUnit.SECONDS) && process.exitValue() == 0)) {
         LOG.error("Couldn't get $name bazel target's output path")
@@ -201,7 +201,7 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
   }
 
   fun buildBazelLibs() {
-    process(projectRoot, "bazel", "build", *bazelLibs.toTypedArray())
+    process(projectRoot, bazelPath, "build", *bazelLibs.toTypedArray())
   }
 
   fun getJarLibs(buildFileFolderPath: String, jars: List<String>): List<LibraryData> {

@@ -19,6 +19,11 @@ private val environment = run {
   }
 }
 
+val bazelPath: String by lazy {
+  val process = process(File("/"), "which", "bazel")
+  process.inputStream.bufferedReader().readLine()
+}
+
 fun process(directory: File, vararg command: String): Process {
   val processBuilder = ProcessBuilder(*command).directory(directory)
   for ((key, value) in environment) {
