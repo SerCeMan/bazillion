@@ -437,12 +437,6 @@ data class Rule(
   val runtimeDeps: Set<AbstractNamedData>
 )
 
-data class Alias(
-  val path: String,
-  val alias: String,
-  val reference: String,
-)
-
 fun isNonProjectDirectory(it: File) = it.isDirectory && (
   it.name.startsWith(".") ||
     it.name.startsWith("bazel-") ||
@@ -473,6 +467,12 @@ class RuleManager(
       val runtimeDeps: List<String>,
     )
 
+    data class Alias(
+      val path: String,
+      val alias: String,
+      val actual: String,
+    )
+
     val aliases = mutableListOf<Alias>()
 
     LOG.info("searching for BUILDs")
@@ -501,15 +501,15 @@ class RuleManager(
             .map { funCall -> funCall.arguments.filterIsInstance<Argument.Keyword>() }
             .mapNotNull { arguments ->
               var alias: String? = null
-              var reference: String? = null
+              var actual: String? = null
               for (arg in arguments) {
                 val value = (arg.value as? StringLiteral)?.value
                 when (arg.name) {
                   "name" -> alias = value
-                  "actual" -> reference = value
+                  "actual" -> actual = value
                 }
               }
-              if (alias != null && reference != null) Alias(projectName, alias, reference) else null
+              if (alias != null && actual != null) Alias(projectName, alias, actual) else null
             }
         )
 
