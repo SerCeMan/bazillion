@@ -176,20 +176,18 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
   }
 
   private val executionRoot by lazy {
-    val process = ProcessBuilder("bazel", "info", "execution_root")
-      .directory(projectRoot)
-      .redirectOutput(ProcessBuilder.Redirect.PIPE)
-      .start()
-    process.inputStream.bufferedReader().readLines()[0]
+    val process = process(projectRoot, "bazel", "info", "execution_root")
+    process.inputStream.bufferedReader().readLine()
   }
+
   private val bazelLibs = mutableListOf<String>()
+
   fun getBazelLib(name: String): LibraryData? {
     return actualLibraries.getOrPut(name) {
-      val process = ProcessBuilder("bazel", "cquery", name,
+      val process = process(projectRoot, "cquery", name,
         "--output=starlark", "--starlark:expr", "'\\n'.join([l.path for l in target.files.to_list()])")
-        .directory(projectRoot)
-        .start()
       if (!(process.waitFor(60, TimeUnit.SECONDS) && process.exitValue() == 0)) {
+        LOG.error("Couldn't get $name bazel target's output path")
         return null
       }
       bazelLibs.add(name)
@@ -203,10 +201,7 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
   }
 
   fun buildBazelLibs() {
-    val command = listOf("bazel", "build") + bazelLibs
-    ProcessBuilder(command)
-      .directory(projectRoot)
-      .start()
+    process(projectRoot, "bazel", "build", *bazelLibs.toTypedArray())
   }
 
   fun getJarLibs(buildFileFolderPath: String, jars: List<String>): List<LibraryData> {
