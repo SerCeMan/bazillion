@@ -186,7 +186,7 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
     return actualLibraries.getOrPut(name) {
       val process = process(
         projectRoot, bazelPath, "cquery", name,
-        "--output=starlark", "--starlark:expr", "'\\n'.join([l.path for l in target.files.to_list()])"
+        "--output=starlark", "--starlark:expr", "'\\n'.join([f.path for f in target.files.to_list()])"
       )
       if (!(process.waitFor(60, TimeUnit.SECONDS) && process.exitValue() == 0)) {
         LOG.error("Couldn't get $name bazel target's output path")
