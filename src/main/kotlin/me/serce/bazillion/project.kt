@@ -464,7 +464,7 @@ class RuleManager(
       val exports: List<String>,
       val deps: List<String>,
       val jars: List<String>,
-      val runtimeDeps: List<String>,
+      val runtimeDeps: List<String>
     )
 
     data class Alias(
@@ -578,7 +578,7 @@ class RuleManager(
               exports = fields["exports"] ?: emptyList(),
               deps = fields["deps"] ?: emptyList(),
               jars = jars,
-              runtimeDeps = fields["runtimeDeps"] ?: emptyList(),
+              runtimeDeps = fields["runtimeDeps"] ?: emptyList()
             )
           } else {
             println("Failed to process $funCall")
@@ -653,7 +653,6 @@ class RuleManager(
               if (depPrefixEnd <= 0) {
                 val bazelLib = libManager.getBazelLib(dep)
                 bazelLib?.let { deps.add(it) }
-//                LOG.warn("Can't find dependency '$dep' in the list of libraries")
               } else {
                 val depName = dep.substring(depPrefixEnd + "//:".length)
                 libManager.getActualLib(depName)?.let { library ->

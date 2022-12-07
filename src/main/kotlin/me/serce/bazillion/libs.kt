@@ -69,7 +69,7 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
   fun getLibMeta(path: String) = librariesMeta[path]
   fun getAllLibs(): Collection<LibraryData> = actualLibraries.values
 
-  val projectRoot = File(project.basePath)
+  private val projectRoot = File(project.basePath)
 
   fun refresh(progress: ProgressIndicator) {
     actualLibraries.clear()
