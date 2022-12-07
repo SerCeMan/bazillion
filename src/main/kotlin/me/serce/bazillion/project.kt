@@ -687,6 +687,7 @@ class RuleManager(
           }
         }
       }
+
       val jars = mutableListOf<LibraryData>()
       if (rawRule.kind != RuleKind.JAVA_PROTO_LIBRARY) {
         fillDeps(deps, rawRule.deps + rawRule.exports, { it.deps + it.exports })
