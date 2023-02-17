@@ -258,7 +258,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
     }
     val ruleManager = RuleManager(project, projectRoot, modules)
 
-    val jdk = JavaSdkVersionUtil.findJdkByVersion(JavaSdkVersion.JDK_11)
+    val jdk = JavaSdkVersionUtil.findJdkByVersion(JavaSdkVersion.JDK_17)
     if (jdk == null) {
       LOG.error("JDK 11 SDK can't be found")
     }
