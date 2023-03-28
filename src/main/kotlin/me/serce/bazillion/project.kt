@@ -275,7 +275,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
         for ((name, nestedRules) in rules) {
           for (rule in nestedRules) {
             when {
-              rule.kind == RuleKind.JUNIT_TESTS || name == "test-lib" -> {
+              rule.kind in listOf(RuleKind.JUNIT_TESTS, RuleKind.JMH_BENCHMARKS) || name == "test-lib" -> {
                 for (dep in sequenceOf(rule.deps, rule.exports, rule.runtimeDeps).flatten()) {
                   when (dep) {
                     is LibraryData -> moduleNode.createChild(
@@ -380,8 +380,10 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
         storePath(ExternalSystemSourceType.RESOURCE, "$projectPath/src/main/resources")
         storePath(ExternalSystemSourceType.RESOURCE, "$projectPath/src/main/webapp")
         storePath(ExternalSystemSourceType.TEST, "$projectPath/src/test/java")
+        storePath(ExternalSystemSourceType.TEST, "$projectPath/src/jmh/java")
         storePath(ExternalSystemSourceType.TEST_GENERATED, "$projectPath/src/test/java_generated")
         storePath(ExternalSystemSourceType.TEST_RESOURCE, "$projectPath/src/test/resources")
+        storePath(ExternalSystemSourceType.TEST_RESOURCE, "$projectPath/src/jmh/resources")
         storePath(ExternalSystemSourceType.EXCLUDED, "$projectPath/target")
       }
 
@@ -414,6 +416,7 @@ enum class RuleKind(vararg val names: String) {
   JAVA_IMPORT("java_import"),
   DATANUCLEUS_JAVA_LIBRARY("datanucleus_java_library"),
   JUNIT_TESTS("java_test", "junit_tests"),
+  JMH_BENCHMARKS("java_jmh_benchmarks"),
   GEN_RULE("genrule"),
   DUMMY("dummy$"),
   COMPILE_SOY("compile_soy");
