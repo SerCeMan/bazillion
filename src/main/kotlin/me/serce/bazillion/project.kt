@@ -593,6 +593,18 @@ class RuleManager(
           libManager.getLibMeta(library.externalName)?.let { deps.addAll(it.allDependencies) }
         }
       }
+      // add jmh to all benchmarks
+      if (rawRule.kind == RuleKind.JMH_BENCHMARKS) {
+        listOf(
+          "@maven//:org_openjdk_jmh_jmh_core"
+        ).mapNotNull {
+          val depName = it.substring("@maven//:".length)
+          libManager.getActualLib(depName)
+            ?: run { LOG.warn("Can't find dependency '$it' in the list of libraries"); null }
+        }.forEach { library ->
+          libManager.getLibMeta(library.externalName)?.let { deps.addAll(it.allDependencies) }
+        }
+      }
 
       fun fillDeps(
         deps: MutableSet<AbstractNamedData>,
