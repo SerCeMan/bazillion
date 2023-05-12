@@ -260,7 +260,7 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
 
     val jdk = JavaSdkVersionUtil.findJdkByVersion(JavaSdkVersion.JDK_17)
     if (jdk == null) {
-      LOG.error("JDK 11 SDK can't be found")
+      LOG.error("JDK 17 SDK can't be found")
     }
 
     // reprocess modules
@@ -296,7 +296,13 @@ class BazilProjectResolver : ExternalSystemProjectResolver<BazilExecutionSetting
                   }
                 }
               }
-              rule.kind in listOf(RuleKind.JAVA_LIBRARY, RuleKind.JAVA_IMPORT, RuleKind.JAVA_BINARY, RuleKind.DATANUCLEUS_JAVA_LIBRARY) -> {
+              rule.kind in listOf(
+                RuleKind.JAVA_LIBRARY,
+                RuleKind.JAVA_IMPORT,
+                RuleKind.JAVA_BINARY,
+                RuleKind.DATANUCLEUS_JAVA_LIBRARY,
+                RuleKind.JAVA_PROTO_LIBRARY
+              ) -> {
                 for (dep in sequenceOf(rule.deps, rule.exports, rule.runtimeDeps).flatten()) {
                   when (dep) {
                     is LibraryData -> moduleNode.createChild(
@@ -409,9 +415,9 @@ class BazilLocalSettings(project: Project) :
   AbstractExternalSystemLocalSettings<AbstractExternalSystemLocalSettings.State>(SYSTEM_ID, project, State()),
   PersistentStateComponent<AbstractExternalSystemLocalSettings.State>
 
-
 enum class RuleKind(vararg val names: String) {
   JAVA_LIBRARY("java_library", "localized_java_library"),
+  JAVA_PROTO_LIBRARY("java_proto_library"),
   JAVA_BINARY("java_binary"),
   JAVA_IMPORT("java_import"),
   DATANUCLEUS_JAVA_LIBRARY("datanucleus_java_library"),
@@ -464,6 +470,14 @@ class RuleManager(
       val runtimeDeps: List<String>
     )
 
+    data class Alias(
+      val path: String,
+      val alias: String,
+      val actual: String,
+    )
+
+    val aliases = mutableListOf<Alias>()
+
     LOG.info("searching for BUILDs")
     val ruleMapping = projectRoot.walk()
       .onEnter { !isNonProjectDirectory(it) }
@@ -484,6 +498,23 @@ class RuleManager(
           // in the case of webtests simply ignore the whole module
           // TODO: handle these tests
         }
+
+        aliases.addAll(
+          funCallExpressions.filter { funCall -> (funCall.function as? Identifier)?.name == "alias" }
+            .map { funCall -> funCall.arguments.filterIsInstance<Argument.Keyword>() }
+            .mapNotNull { arguments ->
+              var alias: String? = null
+              var actual: String? = null
+              for (arg in arguments) {
+                val value = (arg.value as? StringLiteral)?.value
+                when (arg.name) {
+                  "name" -> alias = value
+                  "actual" -> actual = value
+                }
+              }
+              if (alias != null && actual != null) Alias(projectName, alias, actual) else null
+            }
+        )
 
         // libname -> rule
         val allRules: MutableMap<String, RawRule> = hashMapOf()
@@ -560,6 +591,22 @@ class RuleManager(
       }
       .toMap()
 
+    for ((path, alias, reference) in aliases) {
+      var refPath: String
+      var refName: String
+      if (reference.startsWith("//")) {
+        refPath = reference.substring(0, reference.lastIndexOf(':'))
+        refName = reference.substringAfter(':')
+      } else {
+        refPath = path
+        refName = reference.substringAfter(':')
+      }
+      val resolvedReference = ruleMapping[refPath]?.get(refName)
+      if (resolvedReference != null) {
+        ruleMapping[path]?.set(alias, resolvedReference)
+      }
+    }
+
     val ruleCache = mutableMapOf<String, MutableMap<String, Rule>>()
 
     fun findRule(path: String, name: String): Rule {
@@ -592,6 +639,9 @@ class RuleManager(
         }.forEach { library ->
           libManager.getLibMeta(library.externalName)?.let { deps.addAll(it.allDependencies) }
         }
+      } else if (rawRule.kind == RuleKind.JAVA_PROTO_LIBRARY) {
+        val bazelLib = libManager.getBazelLib("$path:$name")
+        bazelLib?.let { deps.add(it) }
       }
       // add jmh to all benchmarks
       if (rawRule.kind == RuleKind.JMH_BENCHMARKS) {
@@ -616,7 +666,8 @@ class RuleManager(
             dep.startsWith("@") -> {
               val depPrefixEnd = dep.indexOf("//:")
               if (depPrefixEnd <= 0) {
-                LOG.warn("Can't find dependency '$dep' in the list of libraries")
+                val bazelLib = libManager.getBazelLib(dep)
+                bazelLib?.let { deps.add(it) }
               } else {
                 val depName = dep.substring(depPrefixEnd + "//:".length)
                 libManager.getActualLib(depName)?.let { library ->
@@ -651,10 +702,14 @@ class RuleManager(
           }
         }
       }
-      fillDeps(deps, rawRule.deps + rawRule.exports, { it.deps + it.exports })
-      fillDeps(runtimeDeps, rawRule.runtimeDeps, { it.runtimeDeps + it.exports })
-      fillDeps(exports, rawRule.exports, { it.exports })
-      val jars = libManager.getJarLibs(rawRule.buildFileFolderPath, rawRule.jars)
+
+      val jars = mutableListOf<LibraryData>()
+      if (rawRule.kind != RuleKind.JAVA_PROTO_LIBRARY) {
+        fillDeps(deps, rawRule.deps + rawRule.exports, { it.deps + it.exports })
+        fillDeps(runtimeDeps, rawRule.runtimeDeps, { it.runtimeDeps + it.exports })
+        fillDeps(exports, rawRule.exports, { it.exports })
+        jars.addAll(libManager.getJarLibs(rawRule.buildFileFolderPath, rawRule.jars))
+      }
 
       val rule = Rule(rawRule.kind, exports, deps + jars, runtimeDeps)
       LOG.info("Processed rule $path:$name")
@@ -673,6 +728,7 @@ class RuleManager(
           .put(name, rule)
       }
     }
+    libManager.buildBazelLibs()
     rules = result
   }
 

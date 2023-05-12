@@ -14,6 +14,7 @@ import com.intellij.util.io.HttpRequests
 import me.serce.bazillion.LibManager.LibMetadata
 import me.serce.bazillion.LibManager.Sources
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 @State(
   name = "BazilLibManager",
@@ -68,17 +69,18 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
   fun getLibMeta(path: String) = librariesMeta[path]
   fun getAllLibs(): Collection<LibraryData> = actualLibraries.values
 
+  private val projectRoot = File(project.basePath)
+
   fun refresh(progress: ProgressIndicator) {
     actualLibraries.clear()
     librariesMeta.clear()
     jarLibraries.clear()
 
-    val projectRoot = File(project.basePath)
     val toDownload = arrayListOf<Pair<LibMetadata, File>>()
     // Create a maps of libs
     progress.text = "updating third parties"
 
-    collectMavenInstalls(projectRoot, toDownload)
+    collectMavenInstalls(toDownload)
 
     LOG.info("resolving libraries")
     progress.text = "resolving libraries"
@@ -92,7 +94,6 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
   }
 
   private fun collectMavenInstalls(
-    projectRoot: File,
     toDownload: ArrayList<Pair<LibMetadata, File>>
   ) {
     val mavenInstallFiles = projectRoot.walk()
@@ -174,13 +175,44 @@ class LibManager(private val project: Project) : PersistentStateComponent<LibMan
     }
   }
 
+  private val executionRoot by lazy {
+    val process = process(projectRoot, bazelPath, "info", "execution_root")
+    process.inputStream.bufferedReader().readLine()
+  }
+
+  private val bazelLibs = mutableListOf<String>()
+
+  fun getBazelLib(name: String): LibraryData? {
+    return actualLibraries.getOrPut(name) {
+      val process = process(
+        projectRoot, bazelPath, "cquery", name,
+        "--output=starlark", "--starlark:expr", "'\\n'.join([f.path for f in target.files.to_list()])"
+      )
+      if (!(process.waitFor(60, TimeUnit.SECONDS) && process.exitValue() == 0)) {
+        LOG.error("Couldn't get $name bazel target's output path")
+        return null
+      }
+      bazelLibs.add(name)
+      LibraryData(SYSTEM_ID, name).apply {
+        process.inputStream.bufferedReader().readLines().forEach {
+          val libType = if (it.endsWith("-src.jar")) LibraryPathType.SOURCE else LibraryPathType.BINARY
+          addPath(libType, "$executionRoot/$it")
+        }
+      }
+    }
+  }
+
+  fun buildBazelLibs() {
+    process(projectRoot, bazelPath, "build", *bazelLibs.toTypedArray())
+  }
+
   fun getJarLibs(buildFileFolderPath: String, jars: List<String>): List<LibraryData> {
     return jars.map { libPath ->
-      jarLibraries.getOrPut(libPath, {
+      jarLibraries.getOrPut(libPath) {
         LibraryData(SYSTEM_ID, libPath).apply {
           addPath(LibraryPathType.BINARY, "${buildFileFolderPath}/${libPath}")
         }
-      })
+      }
     }
   }
 
